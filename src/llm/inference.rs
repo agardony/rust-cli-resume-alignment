@@ -651,134 +651,128 @@ impl LLMEngine {
             device: device.clone(),
         }))
     }
-    
-    /// Generate text from a prompt
-    pub async fn generate(&mut self, prompt: &str) -> Result<InferenceResult> {
-        let start_time = std::time::Instant::now();
+
+    pub async fn generate_with_timing(&mut self, prompt: &str) -> Result<(InferenceResult, TimingBreakdown)> {
+        let total_start = std::time::Instant::now();
         
-        // Reset cache for fresh generation
+        // Time tokenization
+        let tokenize_start = std::time::Instant::now();
         self.model.reset_kv_cache()?;
-        
-        // Tokenize input
         let encoding = self.tokenizer.encode(prompt, true).map_err(|e| {
-            ResumeAlignerError::ModelError(format!(
-                "Failed to tokenize input: {}", e
-            ))
+            ResumeAlignerError::ModelError(format!("Failed to tokenize input: {}", e))
         })?;
-        
         let input_ids = encoding.get_ids();
         let mut tokens = input_ids.to_vec();
-        let mut generated_tokens = Vec::new();
-        let mut index_pos = 0;
+        let tokenize_time = tokenize_start.elapsed();
         
-        // Generate tokens incrementally
+        println!("🔤 Tokenization: {}ms ({} input tokens)", tokenize_time.as_millis(), tokens.len());
+        
+        // Time first forward pass (prompt processing)
+        let first_pass_start = std::time::Instant::now();
+        let input_tensor = Tensor::new(&*tokens, &self.device)?.unsqueeze(0)?;  // FIXED
+        let _first_logits = self.model.forward(&input_tensor, 0)?;
+        let first_pass_time = first_pass_start.elapsed();
+        println!("🚀 First forward pass: {}ms", first_pass_time.as_millis());
+        
+        // Time token generation loop
+        let generation_start = std::time::Instant::now();
+        let mut generated_tokens = Vec::new();
+        let mut index_pos = tokens.len();
+        
         for index in 0..self.config.max_tokens {
-            // Determine context based on whether we're using KV cache and if this is first iteration
-            let (context_size, context_index) = if index > 0 {
-                // After first iteration, only process the last token with KV cache
-                (1, index_pos)
-            } else {
-                // First iteration: process the entire prompt
-                (tokens.len(), 0)
-            };
+            let token_start = std::time::Instant::now();
             
-            // Get the context tokens to process
-            let context_tokens = &tokens[tokens.len().saturating_sub(context_size)..];
+            // Process just the last token (with KV cache)
+            let last_token = tokens[tokens.len() - 1];
+            let input_tensor = Tensor::new([last_token].as_slice(), &self.device)?.unsqueeze(0)?;  // FIXED
+            let logits = self.model.forward(&input_tensor, index_pos)?;
             
-            // Create tensor from context
-            let input_tensor = Tensor::new(context_tokens, &self.device).map_err(|e| {
-                ResumeAlignerError::ModelError(format!(
-                    "Failed to create tensor from context tokens: {}", e
-                ))
-            })?
-            .unsqueeze(0).map_err(|e| {
-                ResumeAlignerError::ModelError(format!(
-                    "Failed to add batch dimension: {}", e
-                ))
-            })?;
-            
-            // Forward pass with proper context index
-            let logits = self.model.forward(&input_tensor, context_index)?;
-            
-            // Extract logits for the last token
-            let logits = logits.squeeze(0).map_err(|e| {
-                ResumeAlignerError::ModelError(format!(
-                    "Failed to squeeze logits: {}", e
-                ))
-            })?;
-            
-            // If we have multiple sequence positions, get the last one
+            // Sample next token (simplified)
+            let logits = logits.squeeze(0)?;
             let final_logits = if logits.dims().len() == 2 {
-                // [seq_len, vocab_size] -> get last position
                 let seq_len = logits.dims()[0];
-                logits.i(seq_len - 1).map_err(|e| {
-                    ResumeAlignerError::ModelError(format!(
-                        "Failed to get last position logits: {}", e
-                    ))
-                })?
+                logits.i(seq_len - 1)?
             } else {
-                // [vocab_size] - already the right shape
                 logits
             };
             
-            // Apply temperature scaling
-            let scaled_logits = if self.config.temperature != 1.0 {
-                (&final_logits / self.config.temperature).map_err(|e| {
-                    ResumeAlignerError::ModelError(format!(
-                        "Failed to apply temperature: {}", e
-                    ))
-                })?
-            } else {
-                final_logits
-            };
+            let next_token = final_logits.argmax(candle_core::D::Minus1)?
+                .to_scalar::<u32>()?;
             
-            // Sample next token using argmax
-            let next_token = scaled_logits
-                .argmax(candle_core::D::Minus1).map_err(|e| {
-                    ResumeAlignerError::ModelError(format!(
-                        "Failed to find argmax: {}", e
-                    ))
-                })?
-                .to_scalar::<u32>().map_err(|e| {
-                    ResumeAlignerError::ModelError(format!(
-                        "Failed to convert token to u32: {}", e
-                    ))
-                })?;
+            let token_time = token_start.elapsed();
             
-            // Update position index
-            index_pos += context_tokens.len();
+            // Log slow tokens
+            if token_time.as_millis() > 100 {
+                println!("⚠️  Slow token {}: {}ms", index, token_time.as_millis());
+            }
             
-            // Check for EOS tokens
+            index_pos += 1;
+            
+            // Check for EOS
             if next_token == 2 || next_token == 32000 {
                 break;
             }
             
-            // Add token to sequences
             tokens.push(next_token);
             generated_tokens.push(next_token);
+            
+            // Early exit check every 10 tokens
+            if index % 10 == 0 && index > 0 {
+                println!("📊 Generated {} tokens in {}ms (avg: {:.1}ms/token)", 
+                    index, generation_start.elapsed().as_millis(),
+                    generation_start.elapsed().as_millis() as f64 / index as f64);
+            }
         }
         
-        // Decode the generated tokens
-        let generated_text = self.tokenizer.decode(&generated_tokens, true)
-            .map_err(|e| {
-                ResumeAlignerError::ModelError(format!(
-                    "Failed to decode tokens: {}", e
-                ))
-            })?;
+        let generation_time = generation_start.elapsed();
         
-        let inference_time = start_time.elapsed();
-        let tokens_per_second = if generated_tokens.is_empty() {
-            0.0
-        } else {
-            generated_tokens.len() as f64 / inference_time.as_secs_f64()
+        // Time decoding
+        let decode_start = std::time::Instant::now();
+        let generated_text = self.tokenizer.decode(&generated_tokens, true)
+            .map_err(|e| ResumeAlignerError::ModelError(format!("Failed to decode: {}", e)))?;
+        let decode_time = decode_start.elapsed();
+        
+        let total_time = total_start.elapsed();
+        
+        let timing = TimingBreakdown {
+            total_ms: total_time.as_millis() as u64,
+            tokenization_ms: tokenize_time.as_millis() as u64,
+            first_pass_ms: first_pass_time.as_millis() as u64,
+            generation_ms: generation_time.as_millis() as u64,
+            decode_ms: decode_time.as_millis() as u64,
+            input_tokens: tokens.len() - generated_tokens.len(),
+            output_tokens: generated_tokens.len(),
+            avg_ms_per_token: if generated_tokens.is_empty() { 0.0 } else { 
+                generation_time.as_millis() as f64 / generated_tokens.len() as f64 
+            },
         };
         
-        Ok(InferenceResult {
+        println!("⏱️  TIMING BREAKDOWN:");
+        println!("   Tokenization: {}ms", timing.tokenization_ms);
+        println!("   First Pass:   {}ms", timing.first_pass_ms);
+        println!("   Generation:   {}ms ({} tokens, {:.1}ms/token)", 
+            timing.generation_ms, timing.output_tokens, timing.avg_ms_per_token);
+        println!("   Decoding:     {}ms", timing.decode_ms);
+        println!("   TOTAL:        {}ms", timing.total_ms);
+        
+        let result = InferenceResult {
             text: generated_text.trim().to_string(),
             token_count: generated_tokens.len(),
-            inference_time_ms: inference_time.as_millis() as u64,
-            tokens_per_second,
-        })
+            inference_time_ms: total_time.as_millis() as u64,
+            tokens_per_second: if generated_tokens.is_empty() { 0.0 } else {
+                generated_tokens.len() as f64 / total_time.as_secs_f64()
+            },
+        };
+        
+        Ok((result, timing))
+    }
+    
+    pub async fn generate(&mut self, prompt: &str) -> Result<InferenceResult> {
+        let (result, timing) = self.generate_with_timing(prompt).await?;
+        println!("⏱️ Generation took {}ms ({:.1} tokens/sec)", 
+            timing.total_ms, 
+            timing.output_tokens as f64 / (timing.total_ms as f64 / 1000.0));
+        Ok(result)
     }
    
    /// Generate text from multiple prompts in batch
@@ -813,6 +807,19 @@ impl LLMEngine {
            temperature: self.config.temperature,
        }
    }
+}
+
+/// Detailed timing breakdown for performance analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimingBreakdown {
+    pub total_ms: u64,
+    pub tokenization_ms: u64,
+    pub first_pass_ms: u64,
+    pub generation_ms: u64,
+    pub decode_ms: u64,
+    pub input_tokens: usize,
+    pub output_tokens: usize,
+    pub avg_ms_per_token: f64,
 }
 
 /// Information about the loaded model for inference

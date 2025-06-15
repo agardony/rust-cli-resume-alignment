@@ -1,28 +1,23 @@
-//! LLM prompt templates for resume analysis and recommendations
+//! Optimized LLM prompt templates for strategic resume analysis
+//! Balances token efficiency with CareerForge-quality strategic output
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Collection of prompt templates for different analysis tasks
+/// Strategic prompt templates optimized for local LLMs
 #[derive(Debug, Clone)]
 pub struct PromptTemplates {
-    pub gap_analysis: String,
-    pub skill_extraction: String,
-    pub recommendations: String,
-    pub resume_improvement: String,
-    pub section_analysis: String,
-    pub keyword_optimization: String,
+    pub strategic_analysis: String,
+    pub achievement_optimizer: String,
+    pub ats_human_alignment: String,
 }
 
 impl Default for PromptTemplates {
     fn default() -> Self {
         Self {
-            gap_analysis: GAP_ANALYSIS_TEMPLATE.to_string(),
-            skill_extraction: SKILL_EXTRACTION_TEMPLATE.to_string(),
-            recommendations: RECOMMENDATIONS_TEMPLATE.to_string(),
-            resume_improvement: RESUME_IMPROVEMENT_TEMPLATE.to_string(),
-            section_analysis: SECTION_ANALYSIS_TEMPLATE.to_string(),
-            keyword_optimization: KEYWORD_OPTIMIZATION_TEMPLATE.to_string(),
+            strategic_analysis: STRATEGIC_ANALYSIS_TEMPLATE.to_string(),
+            achievement_optimizer: ACHIEVEMENT_OPTIMIZER_TEMPLATE.to_string(),
+            ats_human_alignment: ATS_HUMAN_ALIGNMENT_TEMPLATE.to_string(),
         }
     }
 }
@@ -36,315 +31,187 @@ pub struct PromptParams {
     pub exact_matches: Vec<String>,
     pub section_scores: HashMap<String, f32>,
     pub overall_score: f32,
-    pub specific_instruction: Option<String>,
+    pub focus_area: Option<String>, // e.g., "technical_skills", "leadership", "ats_optimization"
 }
 
 impl PromptTemplates {
-    /// Generate a gap analysis prompt
-    pub fn render_gap_analysis(&self, params: &PromptParams) -> String {
-        let missing_keywords_str = if params.missing_keywords.is_empty() {
-            "No significant missing keywords identified.".to_string()
-        } else {
-            format!(
-                "Missing keywords: {}",
-                params.missing_keywords.join(", ")
-            )
-        };
+    /// Generate comprehensive strategic analysis (primary method)
+    pub fn render_strategic_analysis(&self, params: &PromptParams) -> String {
+        let priority_keywords = params.missing_keywords.get(0..5)
+            .unwrap_or(&params.missing_keywords)
+            .join(", ");
+            
+        let key_matches = params.exact_matches.get(0..3)
+            .unwrap_or(&params.exact_matches)
+            .join(", ");
         
-        let exact_matches_str = if params.exact_matches.is_empty() {
-            "No exact keyword matches found.".to_string()
-        } else {
-            format!(
-                "Found keywords: {}",
-                params.exact_matches.join(", ")
-            )
-        };
+        self.strategic_analysis
+            .replace("{resume}", &Self::smart_truncate(&params.resume_content, 800))
+            .replace("{job}", &Self::smart_truncate(&params.job_content, 600))
+            .replace("{missing}", &priority_keywords)
+            .replace("{matches}", &key_matches)
+            .replace("{score}", &format!("{:.0}", params.overall_score * 100.0))
+    }
+    
+    /// Generate achievement-focused optimization prompts
+    pub fn render_achievement_optimizer(&self, params: &PromptParams) -> String {
+        let focus = params.focus_area.as_deref().unwrap_or("general");
         
-        self.gap_analysis
-            .replace("{resume_content}", &Self::truncate_content(&params.resume_content, 2000))
-            .replace("{job_content}", &Self::truncate_content(&params.job_content, 2000))
-            .replace("{missing_keywords}", &missing_keywords_str)
-            .replace("{exact_matches}", &exact_matches_str)
-            .replace("{overall_score}", &format!("{:.1}%", params.overall_score * 100.0))
+        self.achievement_optimizer
+            .replace("{resume}", &Self::extract_experience_section(&params.resume_content, 600))
+            .replace("{job}", &Self::extract_key_requirements(&params.job_content, 400))
+            .replace("{focus}", focus)
+            .replace("{missing}", &params.missing_keywords.get(0..3).unwrap_or(&params.missing_keywords).join(", "))
     }
     
-    /// Generate a recommendations prompt
-    pub fn render_recommendations(&self, params: &PromptParams) -> String {
-        let section_scores_str = params.section_scores
-            .iter()
-            .map(|(name, score)| format!("{}: {:.1}%", name, score * 100.0))
-            .collect::<Vec<_>>()
-            .join("\n");
-        
-        self.recommendations
-            .replace("{resume_content}", &Self::truncate_content(&params.resume_content, 1500))
-            .replace("{job_content}", &Self::truncate_content(&params.job_content, 1500))
-            .replace("{section_scores}", &section_scores_str)
-            .replace("{missing_keywords}", &params.missing_keywords.join(", "))
-            .replace("{overall_score}", &format!("{:.1}%", params.overall_score * 100.0))
+    /// Generate ATS + human psychology alignment analysis
+    pub fn render_ats_human_alignment(&self, params: &PromptParams) -> String {
+        self.ats_human_alignment
+            .replace("{resume}", &Self::smart_truncate(&params.resume_content, 500))
+            .replace("{job}", &Self::smart_truncate(&params.job_content, 400))
+            .replace("{missing}", &params.missing_keywords.get(0..4).unwrap_or(&params.missing_keywords).join(", "))
     }
     
-    /// Generate a skill extraction prompt
-    pub fn render_skill_extraction(&self, params: &PromptParams) -> String {
-        self.skill_extraction
-            .replace("{resume_content}", &Self::truncate_content(&params.resume_content, 2500))
-            .replace("{job_content}", &Self::truncate_content(&params.job_content, 2500))
-    }
-    
-    /// Generate a resume improvement prompt
-    pub fn render_resume_improvement(&self, params: &PromptParams) -> String {
-        let default_instruction = "Provide general improvement suggestions.".to_string();
-        let instruction = params.specific_instruction
-            .as_ref()
-            .unwrap_or(&default_instruction);
-        
-        self.resume_improvement
-            .replace("{resume_content}", &Self::truncate_content(&params.resume_content, 2000))
-            .replace("{job_content}", &Self::truncate_content(&params.job_content, 2000))
-            .replace("{specific_instruction}", instruction)
-            .replace("{missing_keywords}", &params.missing_keywords.join(", "))
-    }
-    
-    /// Generate a section analysis prompt
-    pub fn render_section_analysis(&self, params: &PromptParams) -> String {
-        self.section_analysis
-            .replace("{resume_content}", &Self::truncate_content(&params.resume_content, 2500))
-            .replace("{job_content}", &Self::truncate_content(&params.job_content, 1500))
-    }
-    
-    /// Generate a keyword optimization prompt
-    pub fn render_keyword_optimization(&self, params: &PromptParams) -> String {
-        self.keyword_optimization
-            .replace("{resume_content}", &Self::truncate_content(&params.resume_content, 2000))
-            .replace("{job_content}", &Self::truncate_content(&params.job_content, 2000))
-            .replace("{missing_keywords}", &params.missing_keywords.join(", "))
-            .replace("{exact_matches}", &params.exact_matches.join(", "))
-    }
-    
-    /// Truncate content to fit within token limits
-    fn truncate_content(content: &str, max_chars: usize) -> String {
+    /// Smart content truncation that preserves structure
+    fn smart_truncate(content: &str, max_chars: usize) -> String {
         if content.len() <= max_chars {
-            content.to_string()
-        } else {
-            format!("{}...[content truncated]", &content[..max_chars])
+            return content.to_string();
         }
+        
+        // Try to break at sentence boundaries
+        let truncated = &content[..max_chars];
+        if let Some(last_period) = truncated.rfind('.') {
+            if last_period > max_chars / 2 {
+                return content[..=last_period].to_string();
+            }
+        }
+        
+        // Fall back to character limit
+        format!("{}...", &content[..max_chars.saturating_sub(3)])
+    }
+    
+    /// Extract experience section for focused analysis
+    fn extract_experience_section(resume: &str, max_chars: usize) -> String {
+        // Look for experience-related keywords and extract relevant sections
+        let experience_indicators = ["experience", "employment", "work history", "professional", "career"];
+        
+        for indicator in experience_indicators {
+            if let Some(start) = resume.to_lowercase().find(indicator) {
+                let from_experience = &resume[start..];
+                return Self::smart_truncate(from_experience, max_chars);
+            }
+        }
+        
+        // Fallback to general truncation
+        Self::smart_truncate(resume, max_chars)
+    }
+    
+    /// Extract key requirements from job posting
+    fn extract_key_requirements(job: &str, max_chars: usize) -> String {
+        // Look for requirements sections
+        let req_indicators = ["requirements", "qualifications", "skills", "must have", "preferred"];
+        
+        for indicator in req_indicators {
+            if let Some(start) = job.to_lowercase().find(indicator) {
+                let from_reqs = &job[start..];
+                return Self::smart_truncate(from_reqs, max_chars);
+            }
+        }
+        
+        Self::smart_truncate(job, max_chars)
     }
 }
 
-/// Template for gap analysis between resume and job description
-const GAP_ANALYSIS_TEMPLATE: &str = r#"
-You are an expert resume analyst. Analyze the gap between this resume and job description to identify missing elements and opportunities for improvement.
+/// Strategic analysis template - combines gap analysis, recommendations, and optimization
+const STRATEGIC_ANALYSIS_TEMPLATE: &str = r#"You are an elite ATS optimization expert and career strategist. Analyze this resume-job alignment for both automated screening and hiring manager psychology.
 
-RESUME:
-{resume_content}
+RESUME: {resume}
+JOB: {job}
+MISSING KEYWORDS: {missing}
+FOUND KEYWORDS: {matches}
+CURRENT SCORE: {score}/100
 
-JOB DESCRIPTION:
-{job_content}
+STRATEGIC ANALYSIS:
+1. **FIT ASSESSMENT**: Score/100 with key strength and critical gap
+2. **ATS OPTIMIZATION**: Top 3 keyword integration opportunities (where + how)
+3. **ACHIEVEMENT TRANSFORMATION**: Convert 1-2 current bullets to achievement statements with metrics
+4. **STRATEGIC POSITIONING**: How to frame candidacy as natural solution to their needs
+5. **PRIORITY ACTIONS**: Most impactful changes (order by ROI)
 
-CURRENT ANALYSIS:
-- Overall Match Score: {overall_score}
-- {missing_keywords}
-- {exact_matches}
+Focus on measurable results, natural keyword flow, and psychological appeal to hiring managers."#;
 
-PROVIDE:
-1. **Key Gaps**: List 3-5 most important missing elements
-2. **Skills Assessment**: Which required skills are missing or understated?
-3. **Experience Alignment**: How well does experience match requirements?
-4. **Impact Analysis**: Rate each gap's impact on candidacy (High/Medium/Low)
+/// Achievement-focused optimization for experience transformation
+const ACHIEVEMENT_OPTIMIZER_TEMPLATE: &str = r#"You are a professional resume writer specializing in achievement narratives. Transform job descriptions into compelling achievement statements.
 
-Keep your analysis concise, specific, and actionable. Focus on the most impactful improvements.
-"#;
+EXPERIENCE SECTION: {resume}
+TARGET ROLE REQUIREMENTS: {job}
+FOCUS AREA: {focus}
+MISSING ELEMENTS: {missing}
 
-/// Template for skill extraction and comparison
-const SKILL_EXTRACTION_TEMPLATE: &str = r#"
-You are a technical recruiter analyzing skills alignment. Extract and compare skills between the resume and job requirements.
+TRANSFORM TO ACHIEVEMENTS:
+1. **BEFORE/AFTER**: Take 2-3 current bullets and rewrite using Situation-Action-Result-Impact format
+2. **QUANTIFICATION**: Add specific metrics, percentages, dollar amounts where possible
+3. **KEYWORD INTEGRATION**: Naturally incorporate missing keywords into achievement context
+4. **STRATEGIC FRAMING**: Position achievements to address job requirements directly
 
-RESUME:
-{resume_content}
+Example format: "Led [specific action] resulting in [quantified outcome] by [method/timeframe]"
+Keep language active, specific, and results-focused."#;
 
-JOB REQUIREMENTS:
-{job_content}
+/// ATS and human psychology alignment template
+const ATS_HUMAN_ALIGNMENT_TEMPLATE: &str = r#"You are an ATS algorithm expert and hiring psychology specialist. Optimize for both automated parsing and human decision-making.
 
-EXTRACT AND CATEGORIZE:
-1. **Technical Skills**: Programming languages, frameworks, tools
-2. **Soft Skills**: Leadership, communication, teamwork
-3. **Domain Skills**: Industry-specific knowledge
-4. **Required vs. Present**: For each job requirement, indicate if it's present in the resume
+RESUME: {resume}
+JOB POSTING: {job}
+MISSING KEYWORDS: {missing}
 
-FORMAT:
-- ✅ Skill Name (Strong match)
-- ⚠️ Skill Name (Partial match/needs strengthening)
-- ❌ Skill Name (Missing from resume)
+DUAL OPTIMIZATION:
+1. **ATS SCORING**: Keyword placement strategy (summary, skills, experience) with density recommendations
+2. **HUMAN PSYCHOLOGY**: Language that triggers positive cognitive biases and creates narrative inevitability
+3. **FORMAT BALANCE**: Structure that parses cleanly while maintaining visual appeal
+4. **NATURAL INTEGRATION**: Seamless keyword incorporation without stuffing
+5. **DECISION TRIGGERS**: Specific phrases that make hiring managers want to interview
 
-Be specific about technical versions, experience levels, and context when relevant.
-"#;
-
-/// Template for generating actionable recommendations
-const RECOMMENDATIONS_TEMPLATE: &str = r#"
-You are a career coach providing specific, actionable recommendations to improve resume alignment with this job opportunity.
-
-RESUME:
-{resume_content}
-
-JOB OPPORTUNITY:
-{job_content}
-
-CURRENT STATUS:
-- Overall Score: {overall_score}
-- Section Scores:
-{section_scores}
-- Missing Keywords: {missing_keywords}
-
-PROVIDE 5 SPECIFIC RECOMMENDATIONS:
-For each recommendation, include:
-1. **Action**: What to change/add
-2. **Location**: Which resume section
-3. **Priority**: High/Medium/Low
-4. **Impact**: Expected improvement
-5. **Example**: Specific language or phrasing
-
-Focus on high-impact changes that directly address job requirements. Be specific about wording and placement.
-"#;
-
-/// Template for resume improvement suggestions
-const RESUME_IMPROVEMENT_TEMPLATE: &str = r#"
-You are a professional resume writer. Provide specific improvements to better align this resume with the target position.
-
-CURRENT RESUME:
-{resume_content}
-
-TARGET POSITION:
-{job_content}
-
-SPECIAL FOCUS:
-{specific_instruction}
-
-MISSING ELEMENTS:
-{missing_keywords}
-
-PROVIDE:
-1. **Content Improvements**: What information to add, remove, or modify
-2. **Keyword Integration**: How to naturally incorporate missing keywords
-3. **Structure Suggestions**: Section organization and formatting
-4. **Quantification Opportunities**: Where to add metrics and achievements
-5. **ATS Optimization**: Specific formatting and keyword placement tips
-
-Make suggestions concrete and implementable. Include before/after examples where helpful.
-"#;
-
-/// Template for section-by-section analysis
-const SECTION_ANALYSIS_TEMPLATE: &str = r#"
-You are a resume expert conducting a detailed section-by-section analysis to optimize alignment with job requirements.
-
-RESUME:
-{resume_content}
-
-JOB REQUIREMENTS:
-{job_content}
-
-ANALYZE EACH SECTION:
-1. **Professional Summary/Objective**
-   - Alignment with job requirements
-   - Key messages and positioning
-   - Suggestions for improvement
-
-2. **Experience Section**
-   - Relevance of roles and responsibilities
-   - Achievement quantification
-   - Keyword optimization opportunities
-
-3. **Skills Section**
-   - Technical skills coverage
-   - Missing required skills
-   - Organization and presentation
-
-4. **Education/Certifications**
-   - Relevance to position
-   - Additional certifications needed
-
-5. **Other Sections**
-   - Value and relevance
-   - Potential additions or removals
-
-Provide specific, actionable feedback for each section with priority ratings.
-"#;
-
-/// Template for keyword optimization
-const KEYWORD_OPTIMIZATION_TEMPLATE: &str = r#"
-You are an ATS (Applicant Tracking System) optimization expert. Help improve keyword alignment between this resume and job posting.
-
-RESUME:
-{resume_content}
-
-JOB POSTING:
-{job_content}
-
-KEYWORD ANALYSIS:
-- Missing Keywords: {missing_keywords}
-- Found Keywords: {exact_matches}
-
-PROVIDE:
-1. **Keyword Integration Strategy**:
-   - Where to place each missing keyword naturally
-   - Context and phrasing suggestions
-   - Section-specific recommendations
-
-2. **Natural Language Integration**:
-   - How to incorporate keywords without keyword stuffing
-   - Synonym and variation strategies
-   - Industry-appropriate terminology
-
-3. **ATS Optimization Tips**:
-   - Formatting considerations
-   - Keyword density and placement
-   - Common ATS pitfalls to avoid
-
-4. **Priority Keywords**:
-   - Rank missing keywords by importance
-   - Essential vs. nice-to-have keywords
-
-Focus on maintaining readability while optimizing for ATS systems.
-"#;
+Provide concrete placement suggestions and exact phrasing examples."#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     
     #[test]
-    fn test_prompt_templates_creation() {
-        let templates = PromptTemplates::default();
-        assert!(!templates.gap_analysis.is_empty());
-        assert!(!templates.recommendations.is_empty());
-        assert!(!templates.skill_extraction.is_empty());
-    }
-    
-    #[test]
-    fn test_gap_analysis_rendering() {
+    fn test_strategic_analysis_rendering() {
         let templates = PromptTemplates::default();
         let params = PromptParams {
-            resume_content: "Software Engineer with 5 years experience".to_string(),
-            job_content: "Looking for Senior Software Engineer".to_string(),
-            missing_keywords: vec!["Python".to_string(), "React".to_string()],
-            exact_matches: vec!["Software".to_string(), "Engineer".to_string()],
+            resume_content: "Software Engineer with Python experience".to_string(),
+            job_content: "Senior Software Engineer role requiring React and Python".to_string(),
+            missing_keywords: vec!["React".to_string(), "Leadership".to_string()],
+            exact_matches: vec!["Python".to_string(), "Software".to_string()],
             section_scores: HashMap::new(),
             overall_score: 0.75,
-            specific_instruction: None,
+            focus_area: Some("technical_skills".to_string()),
         };
         
-        let prompt = templates.render_gap_analysis(&params);
-        assert!(prompt.contains("Software Engineer with 5 years experience"));
-        assert!(prompt.contains("Looking for Senior Software Engineer"));
-        assert!(prompt.contains("Python, React"));
-        assert!(prompt.contains("75.0%"));
+        let prompt = templates.render_strategic_analysis(&params);
+        assert!(prompt.contains("React, Leadership"));
+        assert!(prompt.contains("Python, Software"));
+        assert!(prompt.contains("75/100"));
     }
     
     #[test]
-    fn test_content_truncation() {
-        let long_content = "a".repeat(3000);
-        let truncated = PromptTemplates::truncate_content(&long_content, 100);
-        // Should be exactly 100 chars + "...[content truncated]" = 122 chars
-        assert_eq!(truncated.len(), 122);
-        assert!(truncated.ends_with("...[content truncated]"));
-        assert!(truncated.starts_with("aaaa")); // Should start with the original content
+    fn test_smart_truncation() {
+        let content = "First sentence. Second sentence. Third sentence.";
+        let truncated = PromptTemplates::smart_truncate(content, 20);
+        assert!(truncated.ends_with("First sentence."));
+        
+        let short_content = "Short text";
+        let not_truncated = PromptTemplates::smart_truncate(short_content, 100);
+        assert_eq!(not_truncated, short_content);
+    }
+    
+    #[test]
+    fn test_experience_extraction() {
+        let resume = "Education: BS Computer Science\n\nProfessional Experience:\n- Software Engineer at Tech Corp\n- Built web applications";
+        let extracted = PromptTemplates::extract_experience_section(resume, 100);
+        assert!(extracted.to_lowercase().contains("experience"));
+        assert!(extracted.contains("Software Engineer"));
     }
 }

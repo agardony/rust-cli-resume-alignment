@@ -439,7 +439,7 @@ impl ComprehensiveReport {
         match llm_analysis {
             Some(llm) => {
                 LLMInsights {
-                    natural_language_summary: llm.gap_analysis.clone(),
+                    natural_language_summary: llm.strategic_analysis.clone(),
                     skill_assessment: SkillAssessment {
                         technical_skills: vec![], // Will be populated from LLM analysis
                         soft_skills: vec![],

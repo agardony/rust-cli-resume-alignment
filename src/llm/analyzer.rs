@@ -13,9 +13,10 @@ use std::time::Instant;
 /// LLM-specific analysis results
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMAnalysis {
-    pub gap_analysis: String,
+    pub strategic_analysis: String,
+    pub achievement_suggestions: String,
+    pub ats_optimization: String,
     pub recommendations: Vec<LLMRecommendation>,
-    pub skill_assessment: String,
     pub overall_score: f32,
     pub confidence: f32,
     pub processing_time_ms: u64,
@@ -92,7 +93,7 @@ impl LLMAnalyzer {
         
         // Create inference configuration
         let inference_config = InferenceConfig {
-            max_tokens: 1024,
+            max_tokens: 256,
             temperature: 0.7,
             top_p: 0.9,
             top_k: Some(50),
@@ -111,7 +112,7 @@ impl LLMAnalyzer {
         Ok(())
     }
     
-    /// Perform comprehensive LLM analysis
+    /// Perform comprehensive LLM analysis using optimized prompts
     pub async fn analyze(
         &mut self,
         resume: &ProcessedDocument,
@@ -125,7 +126,7 @@ impl LLMAnalyzer {
             self.initialize_engine(None).await?;
         }
         
-        // Prepare prompt parameters first
+        // Prepare prompt parameters
         let prompt_params = self.create_prompt_params(
             resume,
             job,
@@ -134,46 +135,57 @@ impl LLMAnalyzer {
         
         let engine = self.llm_engine.as_mut().unwrap();
         
-        // Perform gap analysis
-        println!("🔍 Performing LLM gap analysis...");
-        let gap_prompt = self.prompt_templates.render_gap_analysis(&prompt_params);
-        let gap_result = engine.generate(&gap_prompt).await?;
+        // Perform strategic analysis (combines gap + recommendations + positioning)
+        println!("🎯 Performing strategic analysis...");
+        let strategic_prompt = self.prompt_templates.render_strategic_analysis(&prompt_params);
+        let (strategic_result, strategic_timing) = engine.generate_with_timing(&strategic_prompt).await?;
+        println!("📊 Strategic analysis timing: {:?}", strategic_timing);
         
-        // Generate recommendations
-        println!("💡 Generating LLM recommendations...");
-        let rec_prompt = self.prompt_templates.render_recommendations(&prompt_params);
-        let rec_result = engine.generate(&rec_prompt).await?;
+        // Generate achievement optimization suggestions
+        println!("💡 Generating achievement optimization...");
+        let achievement_params = PromptParams {
+            focus_area: Some("achievements".to_string()),
+            ..prompt_params.clone()
+        };
+        let achievement_prompt = self.prompt_templates.render_achievement_optimizer(&achievement_params);
+        let (achievement_result, achievement_timing) = engine.generate_with_timing(&achievement_prompt).await?;
+        println!("📊 Achievement optimization timing: {:?}", achievement_timing);
         
-        // Perform skill assessment
-        println!("🎯 Analyzing skills with LLM...");
-        let skill_prompt = self.prompt_templates.render_skill_extraction(&prompt_params);
-        let skill_result = engine.generate(&skill_prompt).await?;
-        
-        // Parse recommendations from LLM output
-        let recommendations = self.parse_recommendations(&rec_result.text);
-        
+        // Perform ATS + human psychology optimization
+        println!("🤖 Analyzing ATS + human factors...");
+        let ats_prompt = self.prompt_templates.render_ats_human_alignment(&prompt_params);
+        let (ats_result, ats_timing) = engine.generate_with_timing(&ats_prompt).await?;
+        println!("📊 ATS optimization timing: {:?}", ats_timing);
+
+        // Parse recommendations from strategic analysis
+        let recommendations = self.parse_recommendations(&strategic_result.text);
+
         // Calculate LLM-based overall score
         let llm_score = self.calculate_llm_score(
-            &gap_result.text,
-            &skill_result.text,
+            &strategic_result.text,
+            &ats_result.text,
             existing_analysis,
         );
-        
+
         let processing_time = start_time.elapsed();
-        
+
         // Calculate token usage
         let token_usage = TokenUsage {
-            input_tokens: gap_result.token_count + rec_result.token_count + skill_result.token_count,
-            output_tokens: gap_result.token_count + rec_result.token_count + skill_result.token_count,
-            total_tokens: (gap_result.token_count + rec_result.token_count + skill_result.token_count) * 2,
+            input_tokens: strategic_result.token_count + achievement_result.token_count + ats_result.token_count,
+            output_tokens: strategic_result.token_count + achievement_result.token_count + ats_result.token_count,
+            total_tokens: (strategic_result.token_count + achievement_result.token_count + ats_result.token_count) * 2,
         };
+
+        // Calculate confidence before moving the text
+        let confidence = self.calculate_confidence(&strategic_result.text);
         
         Ok(LLMAnalysis {
-            gap_analysis: gap_result.text.clone(),
+            strategic_analysis: strategic_result.text,
+            achievement_suggestions: achievement_result.text,
+            ats_optimization: ats_result.text,
             recommendations,
-            skill_assessment: skill_result.text,
             overall_score: llm_score,
-            confidence: self.calculate_confidence(&gap_result.text),
+            confidence,
             processing_time_ms: processing_time.as_millis() as u64,
             model_used: self.current_model.clone().unwrap_or("unknown".to_string()),
             token_usage,
@@ -207,7 +219,7 @@ impl LLMAnalyzer {
             exact_matches,
             section_scores,
             overall_score: existing_analysis.overall_score,
-            specific_instruction: None,
+            focus_area: None, // Updated field name
         }
     }
     
@@ -215,15 +227,22 @@ impl LLMAnalyzer {
     fn parse_recommendations(&self, llm_output: &str) -> Vec<LLMRecommendation> {
         let mut recommendations = Vec::new();
         
-        // Simple parsing - look for numbered recommendations
+        // Enhanced parsing for strategic analysis output
         let lines: Vec<&str> = llm_output.lines().collect();
         let mut current_rec: Option<LLMRecommendation> = None;
+        let mut in_priority_section = false;
         
         for line in lines {
             let line = line.trim();
             
-            // Check if this is a new recommendation (starts with number)
-            if line.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+            // Look for priority actions section
+            if line.to_lowercase().contains("priority actions") || line.to_lowercase().contains("strategic") {
+                in_priority_section = true;
+                continue;
+            }
+            
+            // Check if this is a new recommendation (starts with number or bullet)
+            if (line.starts_with(char::is_numeric) || line.starts_with("•") || line.starts_with("-")) && in_priority_section {
                 // Save previous recommendation if exists
                 if let Some(rec) = current_rec.take() {
                     recommendations.push(rec);
@@ -233,12 +252,12 @@ impl LLMAnalyzer {
                 current_rec = Some(LLMRecommendation {
                     title: line.to_string(),
                     description: String::new(),
-                    priority: LLMPriority::Medium, // Default
-                    section: "General".to_string(),
+                    priority: self.parse_priority(line),
+                    section: self.parse_section(line),
                     impact: "Medium".to_string(),
                     example: None,
                 });
-            } else if !line.is_empty() {
+            } else if !line.is_empty() && in_priority_section {
                 // Add to current recommendation description
                 if let Some(ref mut rec) = current_rec {
                     if !rec.description.is_empty() {
@@ -246,20 +265,11 @@ impl LLMAnalyzer {
                     }
                     rec.description.push_str(line);
                     
-                    // Parse priority and section from content
-                    if line.to_lowercase().contains("high priority") || line.to_lowercase().contains("critical") {
-                        rec.priority = LLMPriority::High;
-                    } else if line.to_lowercase().contains("low priority") {
-                        rec.priority = LLMPriority::Low;
-                    }
-                    
-                    // Extract section information
-                    if line.to_lowercase().contains("experience") {
-                        rec.section = "Experience".to_string();
-                    } else if line.to_lowercase().contains("skills") {
-                        rec.section = "Skills".to_string();
-                    } else if line.to_lowercase().contains("summary") || line.to_lowercase().contains("objective") {
-                        rec.section = "Summary".to_string();
+                    // Update impact based on content
+                    if line.to_lowercase().contains("high impact") || line.to_lowercase().contains("critical") {
+                        rec.impact = "High".to_string();
+                    } else if line.to_lowercase().contains("low impact") {
+                        rec.impact = "Low".to_string();
                     }
                 }
             }
@@ -275,52 +285,113 @@ impl LLMAnalyzer {
         recommendations
     }
     
+    /// Parse priority from recommendation text
+    fn parse_priority(&self, text: &str) -> LLMPriority {
+        let text_lower = text.to_lowercase();
+        if text_lower.contains("high") || text_lower.contains("critical") || text_lower.contains("urgent") {
+            LLMPriority::High
+        } else if text_lower.contains("low") || text_lower.contains("minor") {
+            LLMPriority::Low
+        } else {
+            LLMPriority::Medium
+        }
+    }
+    
+    /// Parse section from recommendation text
+    fn parse_section(&self, text: &str) -> String {
+        let text_lower = text.to_lowercase();
+        if text_lower.contains("experience") || text_lower.contains("work") {
+            "Experience".to_string()
+        } else if text_lower.contains("skills") || text_lower.contains("technical") {
+            "Skills".to_string()
+        } else if text_lower.contains("summary") || text_lower.contains("objective") {
+            "Summary".to_string()
+        } else if text_lower.contains("education") {
+            "Education".to_string()
+        } else {
+            "General".to_string()
+        }
+    }
+    
     /// Calculate LLM-based score from analysis content
     fn calculate_llm_score(
         &self,
-        gap_analysis: &str,
-        skill_assessment: &str,
+        strategic_analysis: &str,
+        ats_analysis: &str,
         existing_analysis: &ExistingAnalysis,
     ) -> f32 {
         // Start with existing scores as baseline
-        let llm_score = (existing_analysis.embedding_score + existing_analysis.keyword_score) / 2.0;
+        let baseline_score = (existing_analysis.embedding_score + existing_analysis.keyword_score) / 2.0;
         
-        // Adjust based on LLM analysis content
-        let gap_lower = gap_analysis.to_lowercase();
-        let skill_lower = skill_assessment.to_lowercase();
+        // Analyze sentiment and quality indicators
+        let combined_text = format!("{} {}", strategic_analysis, ats_analysis).to_lowercase();
         
         // Positive indicators
-        let positive_terms = ["strong match", "good alignment", "well-suited", "excellent", "strong candidate"];
-        let negative_terms = ["missing", "lacking", "weak", "poor", "insufficient", "not suitable"];
+        let positive_terms = [
+            "strong match", "good alignment", "well-suited", "excellent", 
+            "strong candidate", "highly qualified", "perfect fit", "ideal"
+        ];
+        let negative_terms = [
+            "missing", "lacking", "weak", "poor", "insufficient", 
+            "not suitable", "major gaps", "significant issues"
+        ];
         
         let mut adjustment = 0.0;
+        let mut positive_count = 0;
+        let mut negative_count = 0;
         
         for term in &positive_terms {
-            if gap_lower.contains(term) || skill_lower.contains(term) {
-                adjustment += 0.05;
+            if combined_text.contains(term) {
+                positive_count += 1;
+                adjustment += 0.03;
             }
         }
         
         for term in &negative_terms {
-            if gap_lower.contains(term) || skill_lower.contains(term) {
-                adjustment -= 0.03;
+            if combined_text.contains(term) {
+                negative_count += 1;
+                adjustment -= 0.02;
             }
         }
         
+        // Bonus for detailed analysis
+        if combined_text.len() > 1000 {
+            adjustment += 0.02;
+        }
+        
+        // Apply sentiment ratio
+        if positive_count > 0 && negative_count > 0 {
+            let sentiment_ratio = positive_count as f32 / (positive_count + negative_count) as f32;
+            adjustment += (sentiment_ratio - 0.5) * 0.1;
+        }
+        
         // Ensure score stays within bounds
-        (llm_score + adjustment).clamp(0.0, 1.0)
+        (baseline_score + adjustment).clamp(0.0, 1.0)
     }
     
     /// Calculate confidence level based on analysis quality
-    fn calculate_confidence(&self, gap_analysis: &str) -> f32 {
-        let length_score = (gap_analysis.len() as f32 / 1000.0).min(1.0);
-        let specificity_score = if gap_analysis.contains("specific") || gap_analysis.contains("detailed") {
-            0.2
+    fn calculate_confidence(&self, strategic_analysis: &str) -> f32 {
+        let length_score = (strategic_analysis.len() as f32 / 1500.0).min(1.0);
+        
+        let specificity_indicators = [
+            "specific", "detailed", "concrete", "quantified", 
+            "measurable", "actionable", "precise"
+        ];
+        
+        let specificity_count = specificity_indicators.iter()
+            .filter(|&term| strategic_analysis.to_lowercase().contains(term))
+            .count();
+        
+        let specificity_score = (specificity_count as f32 * 0.1).min(0.3);
+        
+        // Check for structured output
+        let structure_score = if strategic_analysis.contains("1.") || strategic_analysis.contains("•") {
+            0.1
         } else {
             0.0
         };
         
-        (0.6 + length_score * 0.2 + specificity_score).min(1.0)
+        (0.5 + length_score * 0.3 + specificity_score + structure_score).min(1.0)
     }
     
     /// Get information about available models
@@ -369,13 +440,11 @@ mod tests {
     
     #[test]
     fn test_parse_recommendations() {
-        // Test the parsing logic directly without needing full analyzer
-        let prompt_templates = PromptTemplates::default();
         let analyzer = TestLLMAnalyzer {
-            prompt_templates,
+            prompt_templates: PromptTemplates::default(),
         };
         
-        let llm_output = "1. Improve technical skills section\n2. Add more quantified achievements\n3. Optimize keywords for ATS";
+        let llm_output = "PRIORITY ACTIONS:\n1. Improve technical skills section\n2. Add more quantified achievements\n3. Optimize keywords for ATS";
         
         let recommendations = analyzer.parse_recommendations(llm_output);
         assert_eq!(recommendations.len(), 3);
@@ -398,12 +467,23 @@ mod tests {
         };
         
         let score = analyzer.calculate_llm_score(
-            "Strong match for this position",
-            "Excellent technical skills",
+            "Strong match for this position with excellent qualifications",
+            "Good ATS optimization potential",
             &existing_analysis,
         );
         
         assert!(score > 0.7); // Should be higher due to positive terms
+    }
+    
+    #[test]
+    fn test_parse_priority() {
+        let analyzer = TestLLMAnalyzer {
+            prompt_templates: PromptTemplates::default(),
+        };
+        
+        assert!(matches!(analyzer.parse_priority("High priority fix"), LLMPriority::High));
+        assert!(matches!(analyzer.parse_priority("Low impact change"), LLMPriority::Low));
+        assert!(matches!(analyzer.parse_priority("Regular improvement"), LLMPriority::Medium));
     }
     
     // Test-only struct that has the methods we want to test
@@ -413,16 +493,20 @@ mod tests {
     
     impl TestLLMAnalyzer {
         fn parse_recommendations(&self, llm_output: &str) -> Vec<LLMRecommendation> {
-            // Copy the logic from the real implementation
             let mut recommendations = Vec::new();
-            
             let lines: Vec<&str> = llm_output.lines().collect();
             let mut current_rec: Option<LLMRecommendation> = None;
+            let mut in_priority_section = false;
             
             for line in lines {
                 let line = line.trim();
                 
-                if line.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+                if line.to_lowercase().contains("priority actions") {
+                    in_priority_section = true;
+                    continue;
+                }
+                
+                if (line.starts_with(char::is_numeric) || line.starts_with("•")) && in_priority_section {
                     if let Some(rec) = current_rec.take() {
                         recommendations.push(rec);
                     }
@@ -448,34 +532,34 @@ mod tests {
         
         fn calculate_llm_score(
             &self,
-            gap_analysis: &str,
-            skill_assessment: &str,
+            strategic_analysis: &str,
+            ats_analysis: &str,
             existing_analysis: &ExistingAnalysis,
         ) -> f32 {
-            // Copy the logic from the real implementation
-            let llm_score = (existing_analysis.embedding_score + existing_analysis.keyword_score) / 2.0;
+            let baseline_score = (existing_analysis.embedding_score + existing_analysis.keyword_score) / 2.0;
+            let combined_text = format!("{} {}", strategic_analysis, ats_analysis).to_lowercase();
             
-            let gap_lower = gap_analysis.to_lowercase();
-            let skill_lower = skill_assessment.to_lowercase();
-            
-            let positive_terms = ["strong match", "good alignment", "well-suited", "excellent", "strong candidate"];
-            let negative_terms = ["missing", "lacking", "weak", "poor", "insufficient", "not suitable"];
-            
+            let positive_terms = ["strong match", "excellent", "good"];
             let mut adjustment = 0.0;
             
             for term in &positive_terms {
-                if gap_lower.contains(term) || skill_lower.contains(term) {
-                    adjustment += 0.05;
+                if combined_text.contains(term) {
+                    adjustment += 0.03;
                 }
             }
             
-            for term in &negative_terms {
-                if gap_lower.contains(term) || skill_lower.contains(term) {
-                    adjustment -= 0.03;
-                }
+            (baseline_score + adjustment).clamp(0.0, 1.0)
+        }
+        
+        fn parse_priority(&self, text: &str) -> LLMPriority {
+            let text_lower = text.to_lowercase();
+            if text_lower.contains("high") || text_lower.contains("critical") {
+                LLMPriority::High
+            } else if text_lower.contains("low") {
+                LLMPriority::Low
+            } else {
+                LLMPriority::Medium
             }
-            
-            (llm_score + adjustment).clamp(0.0, 1.0)
         }
     }
 }
