@@ -133,6 +133,33 @@ This roadmap is derived from analyzing the "dead code" warnings in the current c
 ## 🎯 **Phase 6: Advanced LLM Features** 
 *Priority: HIGH - AI capabilities*
 
+### 🔧 **URGENT: LLM Model Compatibility** 
+**Status**: ⚠️ **NEEDS IMMEDIATE ATTENTION**
+
+**Current Issues:**
+- [x] ✅ **LLM Parameter Passing**: Fixed - `--llm` parameter now properly passed through pipeline
+- [x] ✅ **LLM Engine Initialization**: Fixed - Custom model parameter correctly reaches LLM analyzer
+- [ ] ❌ **Model Format Support**: Only Phi-3 format supported, need Llama model loader
+- [ ] ❌ **Phi-3-Mini Download Issue**: Missing `model-00001-of-00002.safetensors` file
+- [ ] ❌ **Model Type Detection**: Works but needs proper model-specific loaders
+
+**Critical Tasks:**
+- [ ] **Add Llama Model Support**
+  - Implement `LlamaModel` struct in `src/llm/inference.rs`
+  - Add Llama-specific tensor loading (`model.embed_tokens.weight` vs Phi-3 format)
+  - Handle different model architectures (`LlamaForCausalLM` vs `Phi3ForCausalLM`)
+  - Test with TinyLlama model that's already downloaded
+
+- [ ] **Fix Phi-3-Mini Download**
+  - Debug why `model-00001-of-00002.safetensors` is not downloading
+  - Check HuggingFace model repository structure
+  - Fix model manager to handle multi-part downloads correctly
+
+- [ ] **Model Auto-Detection**
+  - Enhance model type detection from config.json
+  - Add proper model loader selection (Phi-3 vs Llama vs others)
+  - Implement fallback mechanisms for unsupported models
+
 ### 🤖 **LLM Inference Extensions** (`src/llm/inference.rs`)
 **Dead Code**: `batch_generate()`, `get_config()`, model info methods
 

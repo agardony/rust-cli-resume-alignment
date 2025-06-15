@@ -222,6 +222,16 @@ impl AnalysisEngine {
         resume: &ProcessedDocument,
         job: &ProcessedDocument,
     ) -> Result<AlignmentReport> {
+        self.analyze_alignment_with_llm(resume, job, None).await
+    }
+    
+    /// Perform comprehensive alignment analysis with custom LLM model
+    pub async fn analyze_alignment_with_llm(
+        &mut self,
+        resume: &ProcessedDocument,
+        job: &ProcessedDocument,
+        llm_model: Option<String>,
+    ) -> Result<AlignmentReport> {
         let start_time = Instant::now();
         
         // 1. Semantic Analysis using embeddings
@@ -236,8 +246,17 @@ impl AnalysisEngine {
         let section_analysis = self.perform_section_analysis(resume, job).await?;
         
         // 4. LLM Analysis (Phase 5)
-        let llm_analysis = self.perform_llm_analysis(resume, job, embedding_score, ats_score).await;
-        let llm_score = llm_analysis.as_ref().map(|analysis| analysis.overall_score).ok();
+        let llm_analysis = match self.perform_llm_analysis_with_model(resume, job, embedding_score, ats_score, llm_model).await {
+            Ok(analysis) => {
+                log::info!("LLM analysis completed successfully with score: {:.1}%", analysis.overall_score * 100.0);
+                Some(analysis)
+            }
+            Err(e) => {
+                log::warn!("LLM analysis failed: {}", e);
+                None
+            }
+        };
+        let llm_score = llm_analysis.as_ref().map(|analysis| analysis.overall_score);
         
         // 5. Gap Analysis and Recommendations
         let gap_analysis = self.perform_gap_analysis(resume, job, &keyword_analysis)?;
@@ -251,7 +270,7 @@ impl AnalysisEngine {
             overall_score,
             embedding_score,
             ats_score,
-            llm_score: None, // Phase 5
+            llm_score,
             semantic_analysis,
             keyword_analysis,
             section_analysis,
@@ -260,7 +279,7 @@ impl AnalysisEngine {
             model_info: ModelInfo {
                 embedding_model: self.config.models.default_embedding_model.clone(),
                 ats_matcher_skills: self.ats_matcher.skill_count(),
-                llm_model: None,
+                llm_model: llm_analysis.map(|analysis| analysis.model_used),
             },
             resume_path: resume.original.file_path.clone(),
             job_path: job.original.file_path.clone(),
@@ -651,9 +670,27 @@ impl AnalysisEngine {
         embedding_score: f32,
         keyword_score: f32,
     ) -> Result<LLMAnalysis> {
+        self.perform_llm_analysis_with_model(resume, job, embedding_score, keyword_score, None).await
+    }
+    
+    /// Perform LLM-based analysis with a specific model
+    async fn perform_llm_analysis_with_model(
+        &self,
+        resume: &ProcessedDocument,
+        job: &ProcessedDocument,
+        embedding_score: f32,
+        keyword_score: f32,
+        model_id: Option<String>,
+    ) -> Result<LLMAnalysis> {
         // Initialize LLM analyzer
         let mut llm_analyzer = LLMAnalyzer::new(self.config.clone()).await.map_err(|e| {
             log::warn!("Failed to initialize LLM analyzer: {}", e);
+            e
+        })?;
+        
+        // Initialize LLM engine with the specified model
+        llm_analyzer.initialize_engine(model_id).await.map_err(|e| {
+            log::warn!("Failed to initialize LLM engine: {}", e);
             e
         })?;
         

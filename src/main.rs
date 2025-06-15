@@ -286,7 +286,11 @@ async fn run_command(command: Commands, config: Config) -> Result<()> {
             
             // Perform comprehensive analysis
             println!("🔍 Performing comprehensive alignment analysis...");
-            let alignment_report = analysis_engine.analyze_alignment(&processed_resume, &processed_job).await?;
+            let alignment_report = if no_llm {
+                analysis_engine.analyze_alignment(&processed_resume, &processed_job).await?
+            } else {
+                analysis_engine.analyze_alignment_with_llm(&processed_resume, &processed_job, llm).await?
+            };
             
             // Display comprehensive results
             println!("\n🎉 Comprehensive Analysis Results:");
