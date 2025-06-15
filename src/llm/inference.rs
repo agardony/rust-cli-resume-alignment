@@ -53,7 +53,7 @@ pub struct LLMEngine {
 
 /// Trait for different LLM model implementations
 trait LLMModel: Send + Sync {
-    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor>;
+    fn forward(&mut self, input_ids: &Tensor, start_pos: usize) -> Result<Tensor>;
     fn get_vocab_size(&self) -> usize;
 }
 
@@ -64,8 +64,8 @@ struct Phi3Model {
 }
 
 impl LLMModel for Phi3Model {
-    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
-        self.model.forward(input_ids, 0).map_err(|e| {
+    fn forward(&mut self, input_ids: &Tensor, start_pos: usize) -> Result<Tensor> {
+        self.model.forward(input_ids, start_pos).map_err(|e| {
             ResumeAlignerError::ModelError(format!("Phi-3 forward pass failed: {}", e))
         })
     }
@@ -73,6 +73,84 @@ impl LLMModel for Phi3Model {
     fn get_vocab_size(&self) -> usize {
         self.vocab_size
     }
+}
+
+/// Get the best available device for inference (GPU if available, CPU fallback)
+pub fn get_best_device() -> Result<Device> {
+    // Try CUDA first (NVIDIA GPUs on Linux/Windows)
+    #[cfg(feature = "cuda")]
+    {
+        if let Ok(device) = Device::new_cuda(0) {
+            println!("🚀 Using CUDA GPU for acceleration");
+            return Ok(device);
+        }
+    }
+    
+    // Try Metal (Apple GPUs on macOS) - but some operations may fall back to CPU
+    if cfg!(target_os = "macos") {
+        match Device::new_metal(0) {
+            Ok(device) => {
+                println!("🚀 Using Metal GPU for acceleration (some ops may fallback to CPU)");
+                return Ok(device);
+            }
+            Err(e) => {
+                println!("⚠️  Metal GPU initialization failed: {}", e);
+            }
+        }
+    }
+    
+    // Fallback to CPU
+    println!("⚠️  No GPU available, using CPU (this will be slower)");
+    Ok(Device::Cpu)
+}
+
+/// Get device with optional user override from environment variable
+pub fn get_device_with_override() -> Result<Device> {
+    // Check for environment variable override
+    if let Ok(device_preference) = std::env::var("RESUME_ALIGNER_DEVICE") {
+        match device_preference.to_lowercase().as_str() {
+            "cuda" => {
+                println!("🔧 Forcing CUDA usage (from environment)");
+                #[cfg(feature = "cuda")]
+                {
+                    return Device::new_cuda(0).map_err(|e| {
+                        ResumeAlignerError::ModelError(format!("Failed to initialize CUDA: {}", e))
+                    });
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    return Err(ResumeAlignerError::ModelError(
+                        "CUDA support not compiled in".to_string()
+                    ));
+                }
+            }
+            "metal" => {
+                println!("🔧 Forcing Metal usage (from environment)");
+                #[cfg(feature = "metal")]
+                {
+                    return Device::new_metal(0).map_err(|e| {
+                        ResumeAlignerError::ModelError(format!("Failed to initialize Metal: {}", e))
+                    });
+                }
+                #[cfg(not(feature = "metal"))]
+                {
+                    return Err(ResumeAlignerError::ModelError(
+                        "Metal support not compiled in".to_string()
+                    ));
+                }
+            }
+            "cpu" => {
+                println!("🔧 Forcing CPU usage (from environment)");
+                return Ok(Device::Cpu);
+            }
+            _ => {
+                println!("⚠️  Unknown device '{}', falling back to auto-detection", device_preference);
+            }
+        }
+    }
+    
+    // Auto-detect if no override
+    get_best_device()
 }
 
 impl LLMEngine {
@@ -83,8 +161,8 @@ impl LLMEngine {
     ) -> Result<Self> {
         println!("🔄 Loading LLM model from: {}", model_path.display());
         
-        // Initialize device (prefer CPU for now, can add CUDA support later)
-        let device = Device::Cpu;
+        // Initialize device with GPU support
+        let device = get_device_with_override()?;
         
         // Load tokenizer
         let tokenizer_path = model_path.join("tokenizer.json");
@@ -141,14 +219,6 @@ impl LLMEngine {
         device: &Device,
         config: &serde_json::Value,
     ) -> Result<Box<dyn LLMModel>> {
-        // Load model weights
-        let weights_path = model_path.join("model.safetensors");
-        if !weights_path.exists() {
-            return Err(ResumeAlignerError::ModelError(
-                "Model weights file not found".to_string()
-            ));
-        }
-        
         // Parse model configuration
         let vocab_size = config["vocab_size"].as_u64().unwrap_or(32064) as usize;
         let hidden_size = config["hidden_size"].as_u64().unwrap_or(3072) as usize;
@@ -156,18 +226,139 @@ impl LLMEngine {
         let num_heads = config["num_attention_heads"].as_u64().unwrap_or(32) as usize;
         let intermediate_size = config["intermediate_size"].as_u64().unwrap_or(8192) as usize;
         
-        // Load safetensors
-        let _tensors = unsafe {
-            candle_core::safetensors::MmapedSafetensors::new(&weights_path)
+        // Load model weights - handle both single and sharded safetensors
+        let mut tensors_map = std::collections::HashMap::new();
+        
+        // Check for sharded safetensors first
+        let index_path = model_path.join("model.safetensors.index.json");
+        if index_path.exists() {
+            println!("  📁 Loading sharded safetensors model...");
+            
+            // Read the index file to get the weight mapping
+            let index_content = std::fs::read_to_string(&index_path).map_err(|e| {
+                ResumeAlignerError::ModelError(format!(
+                    "Failed to read safetensors index: {}", e
+                ))
+            })?;
+            
+            let index_json: serde_json::Value = serde_json::from_str(&index_content)
                 .map_err(|e| {
                     ResumeAlignerError::ModelError(format!(
-                        "Failed to load safetensors: {}", e
+                        "Failed to parse safetensors index: {}", e
                     ))
-                })?
-        };
+                })?;
+            
+            if let Some(weight_map) = index_json.get("weight_map").and_then(|v| v.as_object()) {
+                // Collect all unique shard files
+                let mut shard_files = std::collections::HashSet::new();
+                for filename in weight_map.values() {
+                    if let Some(filename_str) = filename.as_str() {
+                        shard_files.insert(filename_str.to_string());
+                    }
+                }
+                
+                // Load each shard file
+                for shard_file in shard_files {
+                    let shard_path = model_path.join(&shard_file);
+                    if shard_path.exists() {
+                        println!("    📦 Loading shard: {}", shard_file);
+                        let shard_tensors = unsafe {
+                            candle_core::safetensors::MmapedSafetensors::new(&shard_path)
+                                .map_err(|e| {
+                                    ResumeAlignerError::ModelError(format!(
+                                        "Failed to load shard {}: {}", shard_file, e
+                                    ))
+                                })?
+                        };
+                        
+                        // Add all tensors from this shard to our map
+                        for (tensor_name, _) in shard_tensors.tensors() {
+                            let tensor_view = shard_tensors.get(&tensor_name).map_err(|e| {
+                                ResumeAlignerError::ModelError(format!(
+                                    "Failed to get tensor {} from shard {}: {}", tensor_name, shard_file, e
+                                ))
+                            })?;
+                            
+                            // Convert TensorView to Tensor
+                            let tensor = Tensor::from_raw_buffer(
+                                tensor_view.data(),
+                                tensor_view.dtype().try_into().map_err(|e| {
+                                    ResumeAlignerError::ModelError(format!(
+                                        "Failed to convert dtype for tensor {}: {:?}", tensor_name, e
+                                    ))
+                                })?,
+                                tensor_view.shape(),
+                                device
+                            ).map_err(|e| {
+                                ResumeAlignerError::ModelError(format!(
+                                    "Failed to create tensor {} from raw buffer: {}", tensor_name, e
+                                ))
+                            })?;
+                            
+                            tensors_map.insert(tensor_name, tensor);
+                        }
+                    } else {
+                        return Err(ResumeAlignerError::ModelError(format!(
+                            "Shard file not found: {}", shard_file
+                        )));
+                    }
+                }
+            } else {
+                return Err(ResumeAlignerError::ModelError(
+                    "Invalid safetensors index format: missing weight_map".to_string()
+                ));
+            }
+        } else {
+            // Try single safetensors file
+            let weights_path = model_path.join("model.safetensors");
+            if weights_path.exists() {
+                println!("  📦 Loading single safetensors model...");
+                let single_tensors = unsafe {
+                    candle_core::safetensors::MmapedSafetensors::new(&weights_path)
+                        .map_err(|e| {
+                            ResumeAlignerError::ModelError(format!(
+                                "Failed to load safetensors: {}", e
+                            ))
+                        })?
+                };
+                
+                // Add all tensors to our map
+                for (tensor_name, _) in single_tensors.tensors() {
+                    let tensor_view = single_tensors.get(&tensor_name).map_err(|e| {
+                        ResumeAlignerError::ModelError(format!(
+                            "Failed to get tensor {}: {}", tensor_name, e
+                        ))
+                    })?;
+                    
+                    // Convert TensorView to Tensor
+                    let tensor = Tensor::from_raw_buffer(
+                        tensor_view.data(),
+                        tensor_view.dtype().try_into().map_err(|e| {
+                            ResumeAlignerError::ModelError(format!(
+                                "Failed to convert dtype for tensor {}: {:?}", tensor_name, e
+                            ))
+                        })?,
+                        tensor_view.shape(),
+                        device
+                    ).map_err(|e| {
+                        ResumeAlignerError::ModelError(format!(
+                            "Failed to create tensor {} from raw buffer: {}", tensor_name, e
+                        ))
+                    })?;
+                    
+                    tensors_map.insert(tensor_name, tensor);
+                }
+            } else {
+                return Err(ResumeAlignerError::ModelError(
+                    "Model weights file not found (neither sharded nor single safetensors)".to_string()
+                ));
+            }
+        }
+        
+        println!("  ✅ Loaded {} tensors", tensors_map.len());
         
         let vb = VarBuilder::from_tensors(
-            std::collections::HashMap::new(), 
+            tensors_map, 
             DType::F32, 
             device
         );
@@ -233,12 +424,13 @@ impl LLMEngine {
         
         // Generate tokens
         let mut generated_tokens = Vec::new();
-        let mut current_input = input_tensor;
+        let mut all_tokens = input_ids.to_vec();
+        let mut position = input_ids.len(); // Start position after the prompt
+        
+        // Initial forward pass with full prompt
+        let mut logits = self.model.forward(&input_tensor, 0)?;
         
         for _ in 0..self.config.max_tokens {
-            // Forward pass
-            let logits = self.model.forward(&current_input)?;
-            
             // Get last token logits
             let last_token_logits = logits
                 .i((.., logits.dim(1)? - 1, ..))
@@ -260,28 +452,44 @@ impl LLMEngine {
             };
             
             // Sample next token (simplified - using argmax for now)
-            let next_token_id = scaled_logits
+            let argmax_result = scaled_logits
                 .argmax(candle_core::D::Minus1)
                 .map_err(|e| {
                     ResumeAlignerError::ModelError(format!(
                         "Failed to sample next token: {}", e
                     ))
-                })?
-                .to_scalar::<u32>()
-                .map_err(|e| {
+                })?;
+            
+            // Handle the case where argmax returns a tensor with dimensions
+            let next_token_id = if argmax_result.dims().len() == 0 {
+                // Scalar case
+                argmax_result.to_scalar::<u32>().map_err(|e| {
                     ResumeAlignerError::ModelError(format!(
                         "Failed to convert token to scalar: {}", e
                     ))
-                })?;
+                })?
+            } else {
+                // Non-scalar case - get the first element
+                argmax_result.i(0).map_err(|e| {
+                    ResumeAlignerError::ModelError(format!(
+                        "Failed to index argmax result: {}", e
+                    ))
+                })?.to_scalar::<u32>().map_err(|e| {
+                    ResumeAlignerError::ModelError(format!(
+                        "Failed to convert indexed token to scalar: {}", e
+                    ))
+                })?
+            };
             
             generated_tokens.push(next_token_id);
+            all_tokens.push(next_token_id);
             
             // Check for EOS token
             if next_token_id == 32000 || next_token_id == 2 { // Common EOS token IDs
                 break;
             }
             
-            // Prepare input for next iteration
+            // Prepare input for next iteration - only use the new token
             let next_token_tensor = Tensor::new(&[next_token_id], &self.device)
                 .map_err(|e| {
                     ResumeAlignerError::ModelError(format!(
@@ -295,12 +503,9 @@ impl LLMEngine {
                     ))
                 })?;
             
-            current_input = Tensor::cat(&[&current_input, &next_token_tensor], 1)
-                .map_err(|e| {
-                    ResumeAlignerError::ModelError(format!(
-                        "Failed to concatenate tokens: {}", e
-                    ))
-                })?;
+            // Forward pass with just the new token and current position
+            logits = self.model.forward(&next_token_tensor, position)?;
+            position += 1; // Increment position for next iteration
         }
         
         // Decode generated tokens

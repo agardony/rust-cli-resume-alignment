@@ -34,7 +34,7 @@ unicode-segmentation = "1.10"
 
 # Embeddings and ML
 model2vec-rs = { git = "https://github.com/MinishLab/model2vec-rs.git" }
-candle-core = "0.9.1"
+candle-core = { version = "0.9.1", features = ["metal", "accelerate"] }
 candle-transformers = "0.9.1"
 candle-nn = "0.9.1"
 hf-hub = { version = "0.3", features = ["tokio"] }
@@ -59,3 +59,11 @@ chrono = { version = "0.4", features = ["serde"] }
 # Enhanced output formats  
 printpdf = "0.7"  # PDF generation
 askama = { version = "0.14", features = ["serde_json"] }  # HTML templating
+
+[features]
+default = ["metal"]
+cuda = ["candle-core/cuda"]
+metal = []  # Metal is enabled by default in dependencies
+
+# Optional CUDA support for NVIDIA GPUs
+# Enable with: cargo build --features cuda
