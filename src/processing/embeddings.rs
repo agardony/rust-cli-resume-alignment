@@ -64,23 +64,25 @@ impl EmbeddingEngine {
     
     /// Create from default model in config
     pub async fn from_config(config: &Config) -> Result<Self> {
-        let model_path = Self::get_model_path(config)?;
+        let model_path = Self::get_model_path(config).await?;
         Self::new(&model_path, config).await
     }
     
-    /// Get the path to the default embedding model
-    fn get_model_path(config: &Config) -> Result<PathBuf> {
+    /// Get the path to the default embedding model, downloading if necessary
+    async fn get_model_path(config: &Config) -> Result<PathBuf> {
+        use crate::processing::embedding_manager::EmbeddingModelManager;
+        
         let model_name = &config.models.default_embedding_model;
         
-        // Check if it's a local path first
-        let local_path = config.models_dir().join(model_name);
-        if local_path.exists() {
-            return Ok(local_path);
-        }
+        // Create embedding model manager
+        let mut manager = EmbeddingModelManager::new(config.get_models_dir()).await?;
         
-        // For now, assume it's a HuggingFace model ID and will be downloaded
-        // This would be implemented in Phase 5 with model downloading
-        Ok(local_path)
+        // Resolve the model ID (handles various formats like repo_id, name, etc.)
+        let model_id = manager.resolve_model_id(model_name)
+            .unwrap_or_else(|| model_name.clone());
+        
+        // Ensure the model is available (download if needed)
+        manager.ensure_model_available(&model_id).await
     }
     
     /// Encode multiple texts with batching and caching

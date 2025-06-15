@@ -79,16 +79,24 @@ impl Default for Config {
         Self {
             models: ModelConfig {
                 models_dir,
-                default_embedding_model: "minishlab/M2V_base_output".to_string(),
+                default_embedding_model: "potion-base-8M".to_string(),
                 default_llm_model: "microsoft/Phi-3-mini-4k-instruct".to_string(),
                 available_models: vec![
-                    // Model2Vec embedding models
+                    // Potion embedding models (recommended)
+                    AvailableModel {
+                        name: "potion-base-8M".to_string(),
+                        repo_id: "minishlab/potion-base-8M".to_string(),
+                        model_type: ModelType::Embedding,
+                        size_mb: 33,
+                        description: "High-quality Model2Vec embeddings with 8M parameters".to_string(),
+                    },
+                    // Legacy Model2Vec embedding models
                     AvailableModel {
                         name: "m2v-base".to_string(),
                         repo_id: "minishlab/M2V_base_output".to_string(),
                         model_type: ModelType::Embedding,
                         size_mb: 90,
-                        description: "Fast Model2Vec base embeddings model".to_string(),
+                        description: "Legacy Model2Vec base embeddings model".to_string(),
                     },
                     AvailableModel {
                         name: "m2v-large".to_string(),
