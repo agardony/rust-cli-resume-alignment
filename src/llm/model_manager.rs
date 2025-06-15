@@ -22,6 +22,7 @@ pub struct ModelInfo {
 pub enum ModelType {
     Phi3Mini,
     Llama31,
+    Llama32,
     TinyLlama,
     Qwen,
 }
@@ -81,6 +82,25 @@ impl ModelManager {
                     "instruction-following".to_string(),
                     "text-analysis".to_string(),
                     "resume-analysis".to_string(),
+                ],
+            },
+        );
+        
+        // Meta Llama 3.2 3B (optimal balance - NEW DEFAULT)
+        self.available_models.insert(
+            "llama-3.2-3b".to_string(),
+            ModelInfo {
+                name: "Llama-3.2-3B-Instruct".to_string(),
+                repo_id: "meta-llama/Llama-3.2-3B-Instruct".to_string(),
+                size_mb: 3100, // ~3.1GB
+                description: "Optimal balance of performance and efficiency - ideal for M Series Macs".to_string(),
+                model_type: ModelType::Llama32,
+                capabilities: vec![
+                    "instruction-following".to_string(),
+                    "text-analysis".to_string(),
+                    "resume-analysis".to_string(),
+                    "reasoning".to_string(),
+                    "metal-optimized".to_string(),
                 ],
             },
         );
@@ -342,7 +362,8 @@ impl ModelManager {
     /// Auto-select the best available model based on system resources and preferences
     pub async fn auto_select_model(&self) -> Result<String> {
         // Priority order: downloaded models first, then by capability
-        let preferred_order = ["phi-3-mini", "tinyllama", "llama-3.1-8b"];
+        // Llama-3.2-3B is now the preferred default for M Series Macs
+        let preferred_order = ["llama-3.2-3b", "phi-3-mini", "tinyllama", "llama-3.1-8b"];
         
         // First, try to find a downloaded model in preference order
         for model_id in &preferred_order {
@@ -351,8 +372,8 @@ impl ModelManager {
             }
         }
         
-        // If no models are downloaded, recommend phi-3-mini for balance of size and quality
-        Ok("phi-3-mini".to_string())
+        // If no models are downloaded, recommend llama-3.2-3b for optimal M Series Mac performance
+        Ok("llama-3.2-3b".to_string())
     }
     
     /// Get model info by ID

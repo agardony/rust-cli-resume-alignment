@@ -3,7 +3,7 @@
 use crate::error::{Result, ResumeAlignerError};
 use candle_core::{Device, Tensor, IndexOp, DType};
 use candle_nn::VarBuilder;
-use candle_transformers::models::phi3;
+use candle_transformers::models::{phi3, llama};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokenizers::Tokenizer;
@@ -67,6 +67,25 @@ impl LLMModel for Phi3Model {
     fn forward(&mut self, input_ids: &Tensor, start_pos: usize) -> Result<Tensor> {
         self.model.forward(input_ids, start_pos).map_err(|e| {
             ResumeAlignerError::ModelError(format!("Phi-3 forward pass failed: {}", e))
+        })
+    }
+    
+    fn get_vocab_size(&self) -> usize {
+        self.vocab_size
+    }
+}
+
+/// Llama model implementation
+struct LlamaModel {
+    model: llama::Llama,
+    cache: llama::Cache,
+    vocab_size: usize,
+}
+
+impl LLMModel for LlamaModel {
+    fn forward(&mut self, input_ids: &Tensor, start_pos: usize) -> Result<Tensor> {
+        self.model.forward(input_ids, start_pos, &mut self.cache).map_err(|e| {
+            ResumeAlignerError::ModelError(format!("Llama forward pass failed: {}", e))
         })
     }
     
@@ -192,14 +211,31 @@ impl LLMEngine {
             .as_str()
             .unwrap_or("unknown");
         
-        let model: Box<dyn LLMModel> = match model_type {
-            "phi3" | "phi3-mini" => {
+        // Also check architecture field which is more reliable
+        let architecture = model_config["architectures"]
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        
+        let model: Box<dyn LLMModel> = match (model_type, architecture) {
+            ("phi3", _) | (_, "Phi3ForCausalLM") => {
+                println!("🔧 Loading Phi-3 model");
                 Self::load_phi3_model(model_path, &device, &model_config)?
             }
+            ("llama", _) | (_, "LlamaForCausalLM") => {
+                println!("🔧 Loading Llama model");
+                Self::load_llama_model(model_path, &device, &model_config)?
+            }
             _ => {
-                // Default to Phi-3 for now
-                println!("⚠️  Unknown model type '{}', defaulting to Phi-3", model_type);
-                Self::load_phi3_model(model_path, &device, &model_config)?
+                println!("⚠️  Unknown model type '{}'/architecture '{}', trying Llama first then Phi-3", model_type, architecture);
+                // Try Llama first (more common), then fallback to Phi-3
+                if let Ok(model) = Self::load_llama_model(model_path, &device, &model_config) {
+                    model
+                } else {
+                    println!("⚠️  Llama loading failed, falling back to Phi-3");
+                    Self::load_phi3_model(model_path, &device, &model_config)?
+                }
             }
         };
         
@@ -389,6 +425,182 @@ impl LLMEngine {
         
         Ok(Box::new(Phi3Model {
             model: phi3_model,
+            vocab_size,
+        }))
+    }
+    
+    /// Load a Llama model specifically  
+    fn load_llama_model(
+        model_path: &Path,
+        device: &Device,
+        config: &serde_json::Value,
+    ) -> Result<Box<dyn LLMModel>> {
+        // Parse model configuration
+        let vocab_size = config["vocab_size"].as_u64().unwrap_or(32000) as usize;
+        let hidden_size = config["hidden_size"].as_u64().unwrap_or(3072) as usize;
+        let num_layers = config["num_hidden_layers"].as_u64().unwrap_or(28) as usize;
+        let num_heads = config["num_attention_heads"].as_u64().unwrap_or(24) as usize;
+        let num_kv_heads = config["num_key_value_heads"].as_u64().unwrap_or(8) as usize;
+        let intermediate_size = config["intermediate_size"].as_u64().unwrap_or(8192) as usize;
+        let rope_theta = config["rope_theta"].as_f64().unwrap_or(500000.0);
+        
+        // Load model weights using the same logic as Phi-3
+        let mut tensors_map = std::collections::HashMap::new();
+        
+        // Check for sharded safetensors first
+        let index_path = model_path.join("model.safetensors.index.json");
+        if index_path.exists() {
+            println!("  📁 Loading sharded safetensors model...");
+            
+            let index_content = std::fs::read_to_string(&index_path).map_err(|e| {
+                ResumeAlignerError::ModelError(format!(
+                    "Failed to read safetensors index: {}", e
+                ))
+            })?;
+            
+            let index_json: serde_json::Value = serde_json::from_str(&index_content)
+                .map_err(|e| {
+                    ResumeAlignerError::ModelError(format!(
+                        "Failed to parse safetensors index: {}", e
+                    ))
+                })?;
+            
+            if let Some(weight_map) = index_json.get("weight_map").and_then(|v| v.as_object()) {
+                let mut shard_files = std::collections::HashSet::new();
+                for filename in weight_map.values() {
+                    if let Some(filename_str) = filename.as_str() {
+                        shard_files.insert(filename_str.to_string());
+                    }
+                }
+                
+                for shard_file in shard_files {
+                    let shard_path = model_path.join(&shard_file);
+                    if shard_path.exists() {
+                        println!("    📦 Loading shard: {}", shard_file);
+                        let shard_tensors = unsafe {
+                            candle_core::safetensors::MmapedSafetensors::new(&shard_path)
+                                .map_err(|e| {
+                                    ResumeAlignerError::ModelError(format!(
+                                        "Failed to load shard {}: {}", shard_file, e
+                                    ))
+                                })?
+                        };
+                        
+                        for (tensor_name, _) in shard_tensors.tensors() {
+                            let tensor_view = shard_tensors.get(&tensor_name).map_err(|e| {
+                                ResumeAlignerError::ModelError(format!(
+                                    "Failed to get tensor {} from shard {}: {}", tensor_name, shard_file, e
+                                ))
+                            })?;
+                            
+                            let tensor = Tensor::from_raw_buffer(
+                                tensor_view.data(),
+                                tensor_view.dtype().try_into().map_err(|e| {
+                                    ResumeAlignerError::ModelError(format!(
+                                        "Failed to convert dtype for tensor {}: {:?}", tensor_name, e
+                                    ))
+                                })?,
+                                tensor_view.shape(),
+                                device
+                            ).map_err(|e| {
+                                ResumeAlignerError::ModelError(format!(
+                                    "Failed to create tensor {} from raw buffer: {}", tensor_name, e
+                                ))
+                            })?;
+                            
+                            tensors_map.insert(tensor_name, tensor);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Try single safetensors file
+            let weights_path = model_path.join("model.safetensors");
+            if weights_path.exists() {
+                println!("  📦 Loading single safetensors model...");
+                let single_tensors = unsafe {
+                    candle_core::safetensors::MmapedSafetensors::new(&weights_path)
+                        .map_err(|e| {
+                            ResumeAlignerError::ModelError(format!(
+                                "Failed to load safetensors: {}", e
+                            ))
+                        })?
+                };
+                
+                for (tensor_name, _) in single_tensors.tensors() {
+                    let tensor_view = single_tensors.get(&tensor_name).map_err(|e| {
+                        ResumeAlignerError::ModelError(format!(
+                            "Failed to get tensor {}: {}", tensor_name, e
+                        ))
+                    })?;
+                    
+                    let tensor = Tensor::from_raw_buffer(
+                        tensor_view.data(),
+                        tensor_view.dtype().try_into().map_err(|e| {
+                            ResumeAlignerError::ModelError(format!(
+                                "Failed to convert dtype for tensor {}: {:?}", tensor_name, e
+                            ))
+                        })?,
+                        tensor_view.shape(),
+                        device
+                    ).map_err(|e| {
+                        ResumeAlignerError::ModelError(format!(
+                            "Failed to create tensor {} from raw buffer: {}", tensor_name, e
+                        ))
+                    })?;
+                    
+                    tensors_map.insert(tensor_name, tensor);
+                }
+            } else {
+                return Err(ResumeAlignerError::ModelError(
+                    "Model weights file not found (neither sharded nor single safetensors)".to_string()
+                ));
+            }
+        }
+        
+        println!("  ✅ Loaded {} tensors", tensors_map.len());
+        
+        let vb = VarBuilder::from_tensors(
+            tensors_map, 
+            DType::F32, 
+            device
+        );
+        
+        // Create Llama configuration
+        let llama_config = llama::Config {
+            hidden_size,
+            intermediate_size,
+            vocab_size,
+            num_hidden_layers: num_layers,
+            num_attention_heads: num_heads,
+            num_key_value_heads: num_kv_heads,
+            max_position_embeddings: 4096,
+            rms_norm_eps: 1e-5,
+            rope_theta: rope_theta as f32,
+            rope_scaling: None,
+            tie_word_embeddings: false,
+            bos_token_id: Some(1),
+            eos_token_id: Some(llama::LlamaEosToks::Single(2)),
+            use_flash_attn: false, // Disable flash attention for compatibility
+        };
+        
+        // Load the model
+        let llama_model = llama::Llama::load(vb, &llama_config).map_err(|e| {
+            ResumeAlignerError::ModelError(format!(
+                "Failed to load Llama model: {}", e
+            ))
+        })?;
+        
+        // Initialize cache
+        let cache = llama::Cache::new(true, DType::F32, &llama_config, device).map_err(|e| {
+            ResumeAlignerError::ModelError(format!(
+                "Failed to initialize Llama cache: {}", e
+            ))
+        })?;
+        
+        Ok(Box::new(LlamaModel {
+            model: llama_model,
+            cache,
             vocab_size,
         }))
     }
