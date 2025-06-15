@@ -416,9 +416,18 @@ async fn run_command(command: Commands, config: Config) -> Result<()> {
                         let downloaded_models = model_manager.list_downloaded_models();
                         
                         for model_info in model_manager.list_available_models() {
-                            let is_downloaded = downloaded_models.iter().any(|dm| {
-                                model_info.repo_id.contains(&dm.replace("-", "-").replace("_", "-"))
-                            });
+                            // Get the model key/ID for matching
+                            let model_key = if model_info.repo_id.contains("Phi-3-mini") {
+                                "phi-3-mini"
+                            } else if model_info.repo_id.contains("Llama-3.1") {
+                                "llama-3.1-8b"
+                            } else if model_info.repo_id.contains("TinyLlama") {
+                                "tinyllama"
+                            } else {
+                                "unknown"
+                            };
+                            
+                            let is_downloaded = model_manager.is_model_downloaded(model_key);
                             
                             let status = if is_downloaded { "✅ Downloaded" } else { "⬇️  Available" };
                             
