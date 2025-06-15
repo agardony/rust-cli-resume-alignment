@@ -419,6 +419,8 @@ async fn run_command(command: Commands, config: Config) -> Result<()> {
                             // Get the model key/ID for matching
                             let model_key = if model_info.repo_id.contains("Phi-3-mini") {
                                 "phi-3-mini"
+                            } else if model_info.repo_id.contains("Llama-3.2") {
+                                "llama-3.2-3b"
                             } else if model_info.repo_id.contains("Llama-3.1") {
                                 "llama-3.1-8b"
                             } else if model_info.repo_id.contains("TinyLlama") {
@@ -442,6 +444,8 @@ async fn run_command(command: Commands, config: Config) -> Result<()> {
                             // Show model ID for download commands
                             let model_id = if model_info.repo_id.contains("Phi-3-mini") {
                                 "phi-3-mini"
+                            } else if model_info.repo_id.contains("Llama-3.2") {
+                                "llama-3.2-3b"
                             } else if model_info.repo_id.contains("Llama-3.1") {
                                 "llama-3.1-8b"
                             } else if model_info.repo_id.contains("TinyLlama") {
