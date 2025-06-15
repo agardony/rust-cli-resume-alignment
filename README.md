@@ -11,7 +11,7 @@
 ### 🔍 **Multi-Modal Analysis**
 - **Semantic Analysis**: Model2Vec embeddings for deep text understanding
 - **ATS Keyword Matching**: Exact and fuzzy matching with 80+ skill database
-- **LLM Insights**: Local AI analysis with Phi-3, Llama 3.1, or TinyLlama models
+- **LLM Insights**: Local AI analysis with Llama 3.2, Phi-3, Llama 3.1, or TinyLlama models
 - **Weighted Scoring**: Configurable 30/40/30 split (embeddings/keywords/LLM)
 
 ### 📄 **File Format Support**
@@ -20,9 +20,10 @@
 - **Output**: Console, JSON, Markdown, HTML, PDF
 
 ### 🤖 **Local AI Models**
-- **Phi-3-mini**: 2.3GB - Recommended for beginners
-- **Llama 3.1 8B**: 8GB - Best quality analysis
-- **TinyLlama**: 1.1GB - Smallest footprint
+- **Llama 3.2 3B**: 3.1GB - **DEFAULT**
+- **Phi-3-mini**: 2.3GB - Lightweight instruction-tuned model
+- **Llama 3.1 8B**: 8GB - High-quality production model
+- **TinyLlama**: 1.1GB - Ultra-lightweight for basic analysis
 - **Automatic Model Management**: Seamless download and caching
 
 ### 🎨 **Rich Output Formats**
@@ -92,9 +93,10 @@ resume-aligner align --resume resume.pdf --job job.txt --output json --save anal
 
 | Model | Size | Best For | Download Command |
 |-------|------|----------|------------------|
-| **Phi-3-mini** | 2.3GB | Beginners, balanced performance | `models download phi-3-mini` |
-| **Llama 3.1 8B** | 8GB | Best quality analysis | `models download llama-3.1-8b` |
-| **TinyLlama** | 1.1GB | Resource-constrained systems | `models download tinyllama` |
+| **Llama 3.2 3B** | 3.1GB | **DEFAULT** | `models download llama-3.2-3b` |
+| **Phi-3-mini** | 2.3GB | Lightweight, instruction-tuned | `models download phi-3-mini` |
+| **Llama 3.1 8B** | 8GB | Production, highest quality | `models download llama-3.1-8b` |
+| **TinyLlama** | 1.1GB | Ultra-lightweight, basic analysis | `models download tinyllama` |
 
 ### Model Commands
 
@@ -119,7 +121,7 @@ resume-aligner models download phi-3-mini --force
 
 The tool features **seamless automatic model downloading**:
 
-1. **First Run**: Automatically downloads `phi-3-mini` (recommended)
+1. **First Run**: Automatically downloads `llama-3.2-3b` (default)
 2. **Smart Selection**: Chooses best available model based on system resources
 3. **Cached Storage**: Models stored in `~/.resume-aligner/models/`
 4. **Progress Tracking**: Real-time download progress with file-by-file status
