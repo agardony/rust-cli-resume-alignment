@@ -238,34 +238,77 @@ impl ModelManager {
             }
         }
         
-        // Download model weights (safetensors format preferred)
-        match repo.get("model.safetensors").await {
-            Ok(weights_path) => {
-                let dest_path = model_dir.join("model.safetensors");
-                fs::copy(&weights_path, &dest_path).await.map_err(|e| {
-                    ResumeAlignerError::ModelError(format!(
-                        "Failed to copy model weights: {}", e
-                    ))
+        let mut weights_downloaded = false;
+        
+        // Try sharded safetensors first (model-xxxxx-of-xxxxx.safetensors)
+        match repo.get("model.safetensors.index.json").await {
+            Ok(index_path) => {
+                let dest_index = model_dir.join("model.safetensors.index.json");
+                fs::copy(&index_path, &dest_index).await.map_err(|e| {
+                    ResumeAlignerError::ModelError(format!("Failed to copy safetensors index: {}", e))
                 })?;
-                println!("  ✅ Downloaded: model.safetensors");
+                println!("  ✅ Downloaded: model.safetensors.index.json");
+                
+                let index_content = fs::read_to_string(&dest_index).await.map_err(|e| {
+                    ResumeAlignerError::ModelError(format!("Failed to read safetensors index: {}", e))
+                })?;
+                
+                let index_json: serde_json::Value = serde_json::from_str(&index_content).map_err(|e| {
+                    ResumeAlignerError::ModelError(format!("Failed to parse safetensors index: {}", e))
+                })?;
+                
+                if let Some(weight_map) = index_json.get("weight_map").and_then(|v| v.as_object()) {
+                    let mut shard_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    for filename in weight_map.values() {
+                        if let Some(filename_str) = filename.as_str() {
+                            shard_files.insert(filename_str.to_string());
+                        }
+                    }
+                    
+                    for shard_file in shard_files {
+                        match repo.get(&shard_file).await {
+                            Ok(shard_path) => {
+                                let dest_shard = model_dir.join(&shard_file);
+                                fs::copy(&shard_path, &dest_shard).await.map_err(|e| {
+                                    ResumeAlignerError::ModelError(format!("Failed to copy shard {}: {}", shard_file, e))
+                                })?;
+                                println!("  ✅ Downloaded: {}", shard_file);
+                            }
+                            Err(e) => {
+                                return Err(ResumeAlignerError::ModelError(format!("Failed to download shard {}: {}", shard_file, e)));
+                            }
+                        }
+                    }
+                    weights_downloaded = true;
+                }
             }
             Err(_) => {
-                // Fallback to PyTorch format
-                match repo.get("pytorch_model.bin").await {
+                match repo.get("model.safetensors").await {
                     Ok(weights_path) => {
-                        let dest_path = model_dir.join("pytorch_model.bin");
+                        let dest_path = model_dir.join("model.safetensors");
                         fs::copy(&weights_path, &dest_path).await.map_err(|e| {
-                            ResumeAlignerError::ModelError(format!(
-                                "Failed to copy model weights: {}", e
-                            ))
+                            ResumeAlignerError::ModelError(format!("Failed to copy model weights: {}", e))
                         })?;
-                        println!("  ✅ Downloaded: pytorch_model.bin");
+                        println!("  ✅ Downloaded: model.safetensors");
+                        weights_downloaded = true;
                     }
-                    Err(e) => {
-                        return Err(ResumeAlignerError::ModelError(format!(
-                            "Failed to download model weights: {}", e
-                        )));
+                    Err(_) => {
                     }
+                }
+            }
+        }
+        
+        if !weights_downloaded {
+            match repo.get("pytorch_model.bin").await {
+                Ok(weights_path) => {
+                    let dest_path = model_dir.join("pytorch_model.bin");
+                    fs::copy(&weights_path, &dest_path).await.map_err(|e| {
+                        ResumeAlignerError::ModelError(format!("Failed to copy model weights: {}", e))
+                    })?;
+                    println!("  ✅ Downloaded: pytorch_model.bin");
+                }
+                Err(e) => {
+                    return Err(ResumeAlignerError::ModelError(format!("Failed to download model weights: {}", e)));
                 }
             }
         }

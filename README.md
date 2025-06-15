@@ -195,6 +195,33 @@ Print-ready PDF report with professional formatting.
 
 ## ⚙️ Configuration
 
+### Hugging Face Token Setup (Recommended)
+
+To avoid rate limiting when downloading models, set up a **free** Hugging Face API token:
+
+1. **Create an account** at [huggingface.co](https://huggingface.co/join) (free)
+2. **Generate a token** at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
+3. **Set the token** in your environment:
+
+```bash
+# Option 1: Environment variable (recommended)
+export HUGGING_FACE_HUB_TOKEN="your_token_here"
+
+# Option 2: Save to file
+echo "your_token_here" > ~/.cache/huggingface/token
+
+# Option 3: Use huggingface-cli (if installed)
+huggingface-cli login
+```
+
+**Benefits of using a token:**
+- ✅ **Higher download limits** - No more rate limiting errors
+- ✅ **Faster downloads** - Priority access to model files
+- ✅ **Access to gated models** - Some models require acceptance of terms
+- ✅ **100% Free** - No cost for downloading open-source models
+
+**Note**: The token is only used for downloading models and does not incur any charges.
+
 ### Configuration File Location
 
 - **macOS**: `~/.config/resume-aligner/config.toml`
@@ -327,6 +354,53 @@ cargo test --test integration_tests
 - **Integration Tests**: End-to-end file processing
 - **Fixtures**: Sample resume and job description files
 - **Error Handling**: Comprehensive error scenario testing
+
+## 🔧 Troubleshooting
+
+### Model Download Issues
+
+#### Rate Limiting (HTTP 429 Error)
+```
+Failed to download model: request error: HTTP status client error (429 Too Many Requests)
+```
+**Solution**: Set up a Hugging Face token (see [Configuration section](#%EF%B8%8F-configuration)) or wait a few minutes and retry.
+
+#### Network Connection Issues
+```
+Failed to download model: Network error
+```
+**Solutions**:
+- Check your internet connection
+- Verify firewall settings allow HTTPS connections
+- Try using a VPN if in a restricted network
+- Ensure sufficient disk space (models are 1-8GB)
+
+#### Corrupted Downloads
+```
+Model validation failed
+```
+**Solution**: Remove the model and re-download:
+```bash
+resume-aligner models remove phi-3-mini
+resume-aligner models download phi-3-mini
+```
+
+### General Issues
+
+#### PDF Processing Errors
+- Ensure PDF is not password-protected
+- Try converting to TXT format as workaround
+- Check file permissions
+
+#### Memory Issues
+- Use `tinyllama` model for low-memory systems
+- Close other applications during analysis
+- Consider increasing system swap space
+
+#### Performance Issues
+- Enable caching in configuration
+- Use smaller chunk sizes for large documents
+- Consider using `--no-llm` flag for faster analysis
 
 ## 🚧 Development
 
