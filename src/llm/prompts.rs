@@ -1,23 +1,18 @@
-//! Optimized LLM prompt templates for strategic resume analysis
-//! Balances token efficiency with CareerForge-quality strategic output
+//! Ultra-optimized single prompt for comprehensive resume analysis
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Strategic prompt templates optimized for local LLMs
+/// Single optimized prompt template
 #[derive(Debug, Clone)]
 pub struct PromptTemplates {
-    pub strategic_analysis: String,
-    pub achievement_optimizer: String,
-    pub ats_human_alignment: String,
+    pub combined_analysis: String,
 }
 
 impl Default for PromptTemplates {
     fn default() -> Self {
         Self {
-            strategic_analysis: STRATEGIC_ANALYSIS_TEMPLATE.to_string(),
-            achievement_optimizer: ACHIEVEMENT_OPTIMIZER_TEMPLATE.to_string(),
-            ats_human_alignment: ATS_HUMAN_ALIGNMENT_TEMPLATE.to_string(),
+            combined_analysis: COMBINED_ANALYSIS_TEMPLATE.to_string(),
         }
     }
 }
@@ -31,45 +26,26 @@ pub struct PromptParams {
     pub exact_matches: Vec<String>,
     pub section_scores: HashMap<String, f32>,
     pub overall_score: f32,
-    pub focus_area: Option<String>, // e.g., "technical_skills", "leadership", "ats_optimization"
+    pub focus_area: Option<String>,
 }
 
 impl PromptTemplates {
-    /// Generate comprehensive strategic analysis (primary method)
-    pub fn render_strategic_analysis(&self, params: &PromptParams) -> String {
-        let priority_keywords = params.missing_keywords.get(0..5)
+    /// Generate single combined analysis (replaces all 3 methods)
+    pub fn render_combined_analysis(&self, params: &PromptParams) -> String {
+        let priority_keywords = params.missing_keywords.get(0..3)
             .unwrap_or(&params.missing_keywords)
             .join(", ");
             
-        let key_matches = params.exact_matches.get(0..3)
+        let key_matches = params.exact_matches.get(0..2)
             .unwrap_or(&params.exact_matches)
             .join(", ");
         
-        self.strategic_analysis
-            .replace("{resume}", &Self::smart_truncate(&params.resume_content, 800))
-            .replace("{job}", &Self::smart_truncate(&params.job_content, 600))
+        self.combined_analysis
+            .replace("{resume}", &Self::smart_truncate(&params.resume_content, 400))
+            .replace("{job}", &Self::smart_truncate(&params.job_content, 300))
             .replace("{missing}", &priority_keywords)
             .replace("{matches}", &key_matches)
             .replace("{score}", &format!("{:.0}", params.overall_score * 100.0))
-    }
-    
-    /// Generate achievement-focused optimization prompts
-    pub fn render_achievement_optimizer(&self, params: &PromptParams) -> String {
-        let focus = params.focus_area.as_deref().unwrap_or("general");
-        
-        self.achievement_optimizer
-            .replace("{resume}", &Self::extract_experience_section(&params.resume_content, 600))
-            .replace("{job}", &Self::extract_key_requirements(&params.job_content, 400))
-            .replace("{focus}", focus)
-            .replace("{missing}", &params.missing_keywords.get(0..3).unwrap_or(&params.missing_keywords).join(", "))
-    }
-    
-    /// Generate ATS + human psychology alignment analysis
-    pub fn render_ats_human_alignment(&self, params: &PromptParams) -> String {
-        self.ats_human_alignment
-            .replace("{resume}", &Self::smart_truncate(&params.resume_content, 500))
-            .replace("{job}", &Self::smart_truncate(&params.job_content, 400))
-            .replace("{missing}", &params.missing_keywords.get(0..4).unwrap_or(&params.missing_keywords).join(", "))
     }
     
     /// Smart content truncation that preserves structure
@@ -89,129 +65,216 @@ impl PromptTemplates {
         // Fall back to character limit
         format!("{}...", &content[..max_chars.saturating_sub(3)])
     }
-    
-    /// Extract experience section for focused analysis
-    fn extract_experience_section(resume: &str, max_chars: usize) -> String {
-        // Look for experience-related keywords and extract relevant sections
-        let experience_indicators = ["experience", "employment", "work history", "professional", "career"];
-        
-        for indicator in experience_indicators {
-            if let Some(start) = resume.to_lowercase().find(indicator) {
-                let from_experience = &resume[start..];
-                return Self::smart_truncate(from_experience, max_chars);
-            }
-        }
-        
-        // Fallback to general truncation
-        Self::smart_truncate(resume, max_chars)
-    }
-    
-    /// Extract key requirements from job posting
-    fn extract_key_requirements(job: &str, max_chars: usize) -> String {
-        // Look for requirements sections
-        let req_indicators = ["requirements", "qualifications", "skills", "must have", "preferred"];
-        
-        for indicator in req_indicators {
-            if let Some(start) = job.to_lowercase().find(indicator) {
-                let from_reqs = &job[start..];
-                return Self::smart_truncate(from_reqs, max_chars);
-            }
-        }
-        
-        Self::smart_truncate(job, max_chars)
-    }
 }
 
-/// Strategic analysis template - combines gap analysis, recommendations, and optimization
-const STRATEGIC_ANALYSIS_TEMPLATE: &str = r#"You are an elite ATS optimization expert and career strategist. Analyze this resume-job alignment for both automated screening and hiring manager psychology.
+/// Combined template - strategic analysis + achievements + ATS in one focused prompt
+const COMBINED_ANALYSIS_TEMPLATE: &str = r#"Resume: {resume}
 
-RESUME: {resume}
-JOB: {job}
-MISSING KEYWORDS: {missing}
-FOUND KEYWORDS: {matches}
-CURRENT SCORE: {score}/100
+Job: {job}
 
-STRATEGIC ANALYSIS:
-1. **FIT ASSESSMENT**: Score/100 with key strength and critical gap
-2. **ATS OPTIMIZATION**: Top 3 keyword integration opportunities (where + how)
-3. **ACHIEVEMENT TRANSFORMATION**: Convert 1-2 current bullets to achievement statements with metrics
-4. **STRATEGIC POSITIONING**: How to frame candidacy as natural solution to their needs
-5. **PRIORITY ACTIONS**: Most impactful changes (order by ROI)
+Missing: {missing} | Found: {matches} | Score: {score}/100
 
-Focus on measurable results, natural keyword flow, and psychological appeal to hiring managers."#;
+## STRATEGIC
+Score/100, top 2 gaps, positioning strategy
 
-/// Achievement-focused optimization for experience transformation
-const ACHIEVEMENT_OPTIMIZER_TEMPLATE: &str = r#"You are a professional resume writer specializing in achievement narratives. Transform job descriptions into compelling achievement statements.
+## ACHIEVEMENTS  
+Transform 1 bullet to metric-driven result
 
-EXPERIENCE SECTION: {resume}
-TARGET ROLE REQUIREMENTS: {job}
-FOCUS AREA: {focus}
-MISSING ELEMENTS: {missing}
+## ATS
+2 keyword placement tips
 
-TRANSFORM TO ACHIEVEMENTS:
-1. **BEFORE/AFTER**: Take 2-3 current bullets and rewrite using Situation-Action-Result-Impact format
-2. **QUANTIFICATION**: Add specific metrics, percentages, dollar amounts where possible
-3. **KEYWORD INTEGRATION**: Naturally incorporate missing keywords into achievement context
-4. **STRATEGIC FRAMING**: Position achievements to address job requirements directly
-
-Example format: "Led [specific action] resulting in [quantified outcome] by [method/timeframe]"
-Keep language active, specific, and results-focused."#;
-
-/// ATS and human psychology alignment template
-const ATS_HUMAN_ALIGNMENT_TEMPLATE: &str = r#"You are an ATS algorithm expert and hiring psychology specialist. Optimize for both automated parsing and human decision-making.
-
-RESUME: {resume}
-JOB POSTING: {job}
-MISSING KEYWORDS: {missing}
-
-DUAL OPTIMIZATION:
-1. **ATS SCORING**: Keyword placement strategy (summary, skills, experience) with density recommendations
-2. **HUMAN PSYCHOLOGY**: Language that triggers positive cognitive biases and creates narrative inevitability
-3. **FORMAT BALANCE**: Structure that parses cleanly while maintaining visual appeal
-4. **NATURAL INTEGRATION**: Seamless keyword incorporation without stuffing
-5. **DECISION TRIGGERS**: Specific phrases that make hiring managers want to interview
-
-Provide concrete placement suggestions and exact phrasing examples."#;
+Keep under 75 words total."#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     
     #[test]
-    fn test_strategic_analysis_rendering() {
+    fn test_combined_analysis_rendering() {
         let templates = PromptTemplates::default();
         let params = PromptParams {
-            resume_content: "Software Engineer with Python experience".to_string(),
-            job_content: "Senior Software Engineer role requiring React and Python".to_string(),
-            missing_keywords: vec!["React".to_string(), "Leadership".to_string()],
-            exact_matches: vec!["Python".to_string(), "Software".to_string()],
+            resume_content: "Software Engineer with Python experience at Tech Corp. Built web applications using Django framework.".to_string(),
+            job_content: "Senior Software Engineer role requiring React, Python, and leadership skills. Remote position.".to_string(),
+            missing_keywords: vec!["React".to_string(), "Leadership".to_string(), "TypeScript".to_string()],
+            exact_matches: vec!["Python".to_string(), "Software".to_string(), "Engineer".to_string()],
             section_scores: HashMap::new(),
             overall_score: 0.75,
             focus_area: Some("technical_skills".to_string()),
         };
         
-        let prompt = templates.render_strategic_analysis(&params);
-        assert!(prompt.contains("React, Leadership"));
+        let prompt = templates.render_combined_analysis(&params);
+        
+        // Test keyword limiting (should only include first 3 missing, first 2 matches)
+        assert!(prompt.contains("React, Leadership, TypeScript"));
         assert!(prompt.contains("Python, Software"));
         assert!(prompt.contains("75/100"));
+        assert!(prompt.contains("## STRATEGIC"));
+        assert!(prompt.contains("## ACHIEVEMENTS"));
+        assert!(prompt.contains("## ATS"));
     }
     
     #[test]
-    fn test_smart_truncation() {
-        let content = "First sentence. Second sentence. Third sentence.";
-        let truncated = PromptTemplates::smart_truncate(content, 20);
-        assert!(truncated.ends_with("First sentence."));
+    fn test_empty_keywords_handling() {
+        let templates = PromptTemplates::default();
+        let params = PromptParams {
+            resume_content: "Software Engineer".to_string(),
+            job_content: "Software Engineer role".to_string(),
+            missing_keywords: vec![],
+            exact_matches: vec![],
+            section_scores: HashMap::new(),
+            overall_score: 0.5,
+            focus_area: None,
+        };
         
-        let short_content = "Short text";
-        let not_truncated = PromptTemplates::smart_truncate(short_content, 100);
-        assert_eq!(not_truncated, short_content);
+        let prompt = templates.render_combined_analysis(&params);
+        
+        // Should handle empty keywords gracefully
+        assert!(prompt.contains("Missing:  |"));
+        assert!(prompt.contains("Found:  |"));
+        assert!(prompt.contains("50/100"));
     }
     
     #[test]
-    fn test_experience_extraction() {
-        let resume = "Education: BS Computer Science\n\nProfessional Experience:\n- Software Engineer at Tech Corp\n- Built web applications";
-        let extracted = PromptTemplates::extract_experience_section(resume, 100);
-        assert!(extracted.to_lowercase().contains("experience"));
-        assert!(extracted.contains("Software Engineer"));
+    fn test_single_keyword_handling() {
+        let templates = PromptTemplates::default();
+        let params = PromptParams {
+            resume_content: "Developer".to_string(),
+            job_content: "Developer position".to_string(),
+            missing_keywords: vec!["Python".to_string()],
+            exact_matches: vec!["Developer".to_string()],
+            section_scores: HashMap::new(),
+            overall_score: 0.8,
+            focus_area: None,
+        };
+        
+        let prompt = templates.render_combined_analysis(&params);
+        
+        // Should handle single keywords without trailing commas
+        assert!(prompt.contains("Missing: Python |"));
+        assert!(prompt.contains("Found: Developer |"));
+    }
+    
+    #[test]
+    fn test_smart_truncation_sentence_boundary() {
+        let content = "First sentence. Second sentence. Third sentence that goes on for a while.";
+        let truncated = PromptTemplates::smart_truncate(content, 30);
+        
+        // Should truncate at sentence boundary
+        assert_eq!(truncated, "First sentence. Second sentence.");
+        assert!(truncated.len() <= 30);
+    }
+    
+    #[test]
+    fn test_smart_truncation_no_sentence_boundary() {
+        let content = "This is a very long sentence without any periods and it should be truncated";
+        let truncated = PromptTemplates::smart_truncate(content, 20);
+        
+        // Should fall back to character limit with ellipsis
+        assert!(truncated.ends_with("..."));
+        assert_eq!(truncated.len(), 20);
+        assert_eq!(truncated, "This is a very lo...");
+    }
+    
+    #[test]
+    fn test_smart_truncation_short_content() {
+        let content = "Short text";
+        let truncated = PromptTemplates::smart_truncate(content, 100);
+        
+        // Should return unchanged if under limit
+        assert_eq!(truncated, content);
+    }
+    
+    #[test]
+    fn test_smart_truncation_sentence_too_early() {
+        let content = "Short. This is a much longer sentence that goes on and on.";
+        let truncated = PromptTemplates::smart_truncate(content, 30);
+        
+        // Should not break at very early sentence if it's less than half the limit
+        assert!(truncated.ends_with("..."));
+        assert_eq!(truncated.len(), 30);
+    }
+    
+    #[test]
+    fn test_prompt_template_creation() {
+        let templates = PromptTemplates::default();
+        assert!(!templates.combined_analysis.is_empty());
+        assert!(templates.combined_analysis.contains("## STRATEGIC"));
+        assert!(templates.combined_analysis.contains("## ACHIEVEMENTS"));
+        assert!(templates.combined_analysis.contains("## ATS"));
+    }
+    
+    #[test]
+    fn test_score_formatting() {
+        let templates = PromptTemplates::default();
+        let params = PromptParams {
+            resume_content: "Test".to_string(),
+            job_content: "Test".to_string(),
+            missing_keywords: vec![],
+            exact_matches: vec![],
+            section_scores: HashMap::new(),
+            overall_score: 0.876, // Test decimal rounding
+            focus_area: None,
+        };
+        
+        let prompt = templates.render_combined_analysis(&params);
+        assert!(prompt.contains("88/100")); // Should round 87.6 to 88
+    }
+    
+    #[test]
+    fn test_large_keyword_lists() {
+        let templates = PromptTemplates::default();
+        let params = PromptParams {
+            resume_content: "Test".to_string(),
+            job_content: "Test".to_string(),
+            missing_keywords: vec![
+                "Python".to_string(), "React".to_string(), "Node.js".to_string(),
+                "TypeScript".to_string(), "MongoDB".to_string(), "AWS".to_string()
+            ],
+            exact_matches: vec![
+                "JavaScript".to_string(), "HTML".to_string(), "CSS".to_string(),
+                "Git".to_string(), "Docker".to_string()
+            ],
+            section_scores: HashMap::new(),
+            overall_score: 0.65,
+            focus_area: None,
+        };
+        
+        let prompt = templates.render_combined_analysis(&params);
+        
+        // Should limit to first 3 missing and first 2 matches
+        assert!(prompt.contains("Python, React, Node.js"));
+        assert!(prompt.contains("JavaScript, HTML"));
+        assert!(!prompt.contains("TypeScript")); // Should not include 4th missing keyword
+        assert!(!prompt.contains("CSS")); // Should not include 3rd match
+    }
+    
+    #[test]
+    fn test_content_truncation_limits() {
+        let templates = PromptTemplates::default();
+        let long_resume = "A".repeat(1000); // 1000 characters
+        let long_job = "B".repeat(800); // 800 characters
+        
+        let params = PromptParams {
+            resume_content: long_resume,
+            job_content: long_job,
+            missing_keywords: vec!["test".to_string()],
+            exact_matches: vec!["match".to_string()],
+            section_scores: HashMap::new(),
+            overall_score: 0.5,
+            focus_area: None,
+        };
+        
+        let prompt = templates.render_combined_analysis(&params);
+        
+        // Resume should be truncated to ~400 chars, job to ~300 chars
+        let resume_section = prompt.find("Resume: ").unwrap();
+        let job_section = prompt.find("Job: ").unwrap();
+        let resume_content = &prompt[resume_section + 8..job_section].trim();
+        
+        assert!(resume_content.len() <= 403); // 400 + "..." = 403
+        
+        // Verify structure is maintained
+        assert!(prompt.contains("Missing: test"));
+        assert!(prompt.contains("Found: match"));
     }
 }

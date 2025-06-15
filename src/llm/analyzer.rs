@@ -112,7 +112,7 @@ impl LLMAnalyzer {
         Ok(())
     }
     
-    /// Perform comprehensive LLM analysis using optimized prompts
+    /// Perform comprehensive LLM analysis using single optimized prompt
     pub async fn analyze(
         &mut self,
         resume: &ProcessedDocument,
@@ -135,54 +135,41 @@ impl LLMAnalyzer {
         
         let engine = self.llm_engine.as_mut().unwrap();
         
-        // Perform strategic analysis (combines gap + recommendations + positioning)
-        println!("🎯 Performing strategic analysis...");
-        let strategic_prompt = self.prompt_templates.render_strategic_analysis(&prompt_params);
-        let (strategic_result, strategic_timing) = engine.generate_with_timing(&strategic_prompt).await?;
-        println!("📊 Strategic analysis timing: {:?}", strategic_timing);
+        // SINGLE COMBINED ANALYSIS (replaces 3 separate calls)
+        println!("🎯 Performing combined LLM analysis...");
+        let combined_prompt = self.prompt_templates.render_combined_analysis(&prompt_params);
+        let combined_result = engine.generate(&combined_prompt).await?; // No timing output
         
-        // Generate achievement optimization suggestions
-        println!("💡 Generating achievement optimization...");
-        let achievement_params = PromptParams {
-            focus_area: Some("achievements".to_string()),
-            ..prompt_params.clone()
-        };
-        let achievement_prompt = self.prompt_templates.render_achievement_optimizer(&achievement_params);
-        let (achievement_result, achievement_timing) = engine.generate_with_timing(&achievement_prompt).await?;
-        println!("📊 Achievement optimization timing: {:?}", achievement_timing);
-        
-        // Perform ATS + human psychology optimization
-        println!("🤖 Analyzing ATS + human factors...");
-        let ats_prompt = self.prompt_templates.render_ats_human_alignment(&prompt_params);
-        let (ats_result, ats_timing) = engine.generate_with_timing(&ats_prompt).await?;
-        println!("📊 ATS optimization timing: {:?}", ats_timing);
+        // Parse the structured response into separate sections
+        let (strategic_analysis, achievement_suggestions, ats_optimization) = 
+            self.parse_combined_response(&combined_result.text);
 
         // Parse recommendations from strategic analysis
-        let recommendations = self.parse_recommendations(&strategic_result.text);
+        let recommendations = self.parse_recommendations(&strategic_analysis);
 
         // Calculate LLM-based overall score
         let llm_score = self.calculate_llm_score(
-            &strategic_result.text,
-            &ats_result.text,
+            &strategic_analysis,
+            &ats_optimization,
             existing_analysis,
         );
 
         let processing_time = start_time.elapsed();
 
-        // Calculate token usage
+        // Simplified token usage calculation (single call)
         let token_usage = TokenUsage {
-            input_tokens: strategic_result.token_count + achievement_result.token_count + ats_result.token_count,
-            output_tokens: strategic_result.token_count + achievement_result.token_count + ats_result.token_count,
-            total_tokens: (strategic_result.token_count + achievement_result.token_count + ats_result.token_count) * 2,
+            input_tokens: combined_result.token_count / 2, // Rough estimate: half input, half output
+            output_tokens: combined_result.token_count / 2,
+            total_tokens: combined_result.token_count,
         };
 
-        // Calculate confidence before moving the text
-        let confidence = self.calculate_confidence(&strategic_result.text);
+        // Calculate confidence from strategic analysis
+        let confidence = self.calculate_confidence(&strategic_analysis);
         
         Ok(LLMAnalysis {
-            strategic_analysis: strategic_result.text,
-            achievement_suggestions: achievement_result.text,
-            ats_optimization: ats_result.text,
+            strategic_analysis,
+            achievement_suggestions,
+            ats_optimization,
             recommendations,
             overall_score: llm_score,
             confidence,
@@ -191,7 +178,41 @@ impl LLMAnalyzer {
             token_usage,
         })
     }
-    
+
+    /// Parse the combined response into separate sections
+    fn parse_combined_response(&self, text: &str) -> (String, String, String) {
+        let strategic = self.extract_section(text, "STRATEGIC")
+            .unwrap_or_else(|| "Analysis complete. Review alignment and positioning.".to_string());
+        
+        let achievements = self.extract_section(text, "ACHIEVEMENTS")
+            .unwrap_or_else(|| "Focus on quantified results and measurable impact.".to_string());
+        
+        let ats = self.extract_section(text, "ATS")
+            .unwrap_or_else(|| "Optimize keyword placement in summary and experience sections.".to_string());
+        
+        (strategic, achievements, ats)
+    }
+
+    /// Extract content from marked sections (## SECTION_NAME)
+    fn extract_section(&self, text: &str, section_name: &str) -> Option<String> {
+        let section_marker = format!("## {}", section_name);
+        if let Some(start) = text.find(&section_marker) {
+            let content_start = start + section_marker.len();
+            let content = &text[content_start..];
+            
+            // Find the end (next ## marker or end of text)
+            let end = content.find("## ").unwrap_or(content.len());
+            let section_content = content[..end].trim();
+            
+            if !section_content.is_empty() {
+                Some(section_content.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }    
     /// Create prompt parameters from analysis data
     fn create_prompt_params(
         &self,

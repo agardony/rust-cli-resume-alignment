@@ -124,6 +124,13 @@ impl LLMModel for LlamaModel {
     }
 }
 
+fn is_verbose_mode() -> bool {
+    match std::env::var("RESUME_ALIGNER_VERBOSE") {
+        Ok(val) => val == "1" || val.to_lowercase() == "true",
+        Err(_) => false,
+    }
+}
+
 /// Get the best available device for inference (GPU if available, CPU fallback)
 pub fn get_best_device() -> Result<Device> {
     // Try CUDA first (NVIDIA GPUs on Linux/Windows)
@@ -665,15 +672,19 @@ impl LLMEngine {
         let mut tokens = input_ids.to_vec();
         let tokenize_time = tokenize_start.elapsed();
         
-        println!("🔤 Tokenization: {}ms ({} input tokens)", tokenize_time.as_millis(), tokens.len());
+        if is_verbose_mode() {
+            println!("🔤 Tokenization: {}ms ({} input tokens)", tokenize_time.as_millis(), tokens.len());
+        }
         
         // Time first forward pass (prompt processing)
         let first_pass_start = std::time::Instant::now();
         let input_tensor = Tensor::new(&*tokens, &self.device)?.unsqueeze(0)?;  // FIXED
         let _first_logits = self.model.forward(&input_tensor, 0)?;
         let first_pass_time = first_pass_start.elapsed();
-        println!("🚀 First forward pass: {}ms", first_pass_time.as_millis());
-        
+
+        if is_verbose_mode() {
+            println!("🚀 First forward pass: {}ms", first_pass_time.as_millis());
+        }
         // Time token generation loop
         let generation_start = std::time::Instant::now();
         let mut generated_tokens = Vec::new();
@@ -702,7 +713,7 @@ impl LLMEngine {
             let token_time = token_start.elapsed();
             
             // Log slow tokens
-            if token_time.as_millis() > 100 {
+            if token_time.as_millis() > 100 && is_verbose_mode() {
                 println!("⚠️  Slow token {}: {}ms", index, token_time.as_millis());
             }
             
@@ -717,7 +728,7 @@ impl LLMEngine {
             generated_tokens.push(next_token);
             
             // Early exit check every 10 tokens
-            if index % 10 == 0 && index > 0 {
+            if index % 10 == 0 && index > 0 && is_verbose_mode(){
                 println!("📊 Generated {} tokens in {}ms (avg: {:.1}ms/token)", 
                     index, generation_start.elapsed().as_millis(),
                     generation_start.elapsed().as_millis() as f64 / index as f64);
@@ -747,13 +758,15 @@ impl LLMEngine {
             },
         };
         
-        println!("⏱️  TIMING BREAKDOWN:");
-        println!("   Tokenization: {}ms", timing.tokenization_ms);
-        println!("   First Pass:   {}ms", timing.first_pass_ms);
-        println!("   Generation:   {}ms ({} tokens, {:.1}ms/token)", 
-            timing.generation_ms, timing.output_tokens, timing.avg_ms_per_token);
-        println!("   Decoding:     {}ms", timing.decode_ms);
-        println!("   TOTAL:        {}ms", timing.total_ms);
+        if is_verbose_mode() {
+            println!("⏱️  TIMING BREAKDOWN:");
+            println!("   Tokenization: {}ms", timing.tokenization_ms);
+            println!("   First Pass:   {}ms", timing.first_pass_ms);
+            println!("   Generation:   {}ms ({} tokens, {:.1}ms/token)", 
+                timing.generation_ms, timing.output_tokens, timing.avg_ms_per_token);
+            println!("   Decoding:     {}ms", timing.decode_ms);
+            println!("   TOTAL:        {}ms", timing.total_ms);
+        }
         
         let result = InferenceResult {
             text: generated_text.trim().to_string(),
@@ -769,11 +782,17 @@ impl LLMEngine {
     
     pub async fn generate(&mut self, prompt: &str) -> Result<InferenceResult> {
         let (result, timing) = self.generate_with_timing(prompt).await?;
-        println!("⏱️ Generation took {}ms ({:.1} tokens/sec)", 
-            timing.total_ms, 
-            timing.output_tokens as f64 / (timing.total_ms as f64 / 1000.0));
+        
+        // Only show timing if explicitly requested
+        if is_verbose_mode() {
+            println!("⏱️ Generation took {}ms ({:.1} tokens/sec)", 
+                timing.total_ms, 
+                timing.output_tokens as f64 / (timing.total_ms as f64 / 1000.0));
+        }
+        
         Ok(result)
     }
+    
    
    /// Generate text from multiple prompts in batch
    pub async fn batch_generate(&mut self, prompts: &[String]) -> Result<Vec<InferenceResult>> {
