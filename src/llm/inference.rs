@@ -55,6 +55,8 @@ pub struct LLMEngine {
 trait LLMModel: Send + Sync {
     fn forward(&mut self, input_ids: &Tensor, start_pos: usize) -> Result<Tensor>;
     fn get_vocab_size(&self) -> usize;
+    fn reset_kv_cache(&mut self) -> Result<()>;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 /// Phi-3 model implementation
@@ -73,6 +75,15 @@ impl LLMModel for Phi3Model {
     fn get_vocab_size(&self) -> usize {
         self.vocab_size
     }
+    
+    fn reset_kv_cache(&mut self) -> Result<()> {
+        // Phi-3 doesn't use explicit cache in our implementation
+        Ok(())
+    }
+    
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 /// Llama model implementation
@@ -80,6 +91,17 @@ struct LlamaModel {
     model: llama::Llama,
     cache: llama::Cache,
     vocab_size: usize,
+    config: llama::Config,
+    device: Device,
+}
+
+impl LlamaModel {
+    /// Reset the KV cache for a fresh generation session
+    pub fn reset_cache(&mut self) -> Result<()> {
+        self.cache = llama::Cache::new(true, DType::F32, &self.config, &self.device)
+            .map_err(|e| ResumeAlignerError::ModelError(format!("Failed to reset cache: {}", e)))?;
+        Ok(())
+    }
 }
 
 impl LLMModel for LlamaModel {
@@ -91,6 +113,14 @@ impl LLMModel for LlamaModel {
     
     fn get_vocab_size(&self) -> usize {
         self.vocab_size
+    }
+    
+    fn reset_kv_cache(&mut self) -> Result<()> {
+        self.reset_cache()
+    }
+    
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 
@@ -443,6 +473,7 @@ impl LLMEngine {
         let num_kv_heads = config["num_key_value_heads"].as_u64().unwrap_or(8) as usize;
         let intermediate_size = config["intermediate_size"].as_u64().unwrap_or(8192) as usize;
         let rope_theta = config["rope_theta"].as_f64().unwrap_or(500000.0);
+        let tie_word_embeddings = config["tie_word_embeddings"].as_bool().unwrap_or(false);
         
         // Load model weights using the same logic as Phi-3
         let mut tensors_map = std::collections::HashMap::new();
@@ -560,6 +591,20 @@ impl LLMEngine {
         
         println!("  ✅ Loaded {} tensors", tensors_map.len());
         
+        // Handle tied word embeddings for Llama models
+        if tie_word_embeddings {
+            if let Some(embed_weights) = tensors_map.get("model.embed_tokens.weight") {
+                if !tensors_map.contains_key("lm_head.weight") {
+                    println!("  🔗 Creating tied lm_head.weight from embed_tokens.weight");
+                    tensors_map.insert("lm_head.weight".to_string(), embed_weights.clone());
+                }
+            } else {
+                return Err(ResumeAlignerError::ModelError(
+                    "Cannot tie embeddings: model.embed_tokens.weight not found".to_string()
+                ));
+            }
+        }
+        
         let vb = VarBuilder::from_tensors(
             tensors_map, 
             DType::F32, 
@@ -591,7 +636,7 @@ impl LLMEngine {
             ))
         })?;
         
-        // Initialize cache
+        // Initialize cache with KV cache ENABLED for optimization
         let cache = llama::Cache::new(true, DType::F32, &llama_config, device).map_err(|e| {
             ResumeAlignerError::ModelError(format!(
                 "Failed to initialize Llama cache: {}", e
@@ -602,12 +647,17 @@ impl LLMEngine {
             model: llama_model,
             cache,
             vocab_size,
+            config: llama_config,
+            device: device.clone(),
         }))
     }
     
     /// Generate text from a prompt
     pub async fn generate(&mut self, prompt: &str) -> Result<InferenceResult> {
         let start_time = std::time::Instant::now();
+        
+        // Reset cache for fresh generation
+        self.model.reset_kv_cache()?;
         
         // Tokenize input
         let encoding = self.tokenizer.encode(prompt, true).map_err(|e| {
@@ -617,119 +667,111 @@ impl LLMEngine {
         })?;
         
         let input_ids = encoding.get_ids();
-        let input_tensor = Tensor::new(input_ids, &self.device).map_err(|e| {
-            ResumeAlignerError::ModelError(format!(
-                "Failed to create input tensor: {}", e
-            ))
-        })?;
+        let mut tokens = input_ids.to_vec();
+        let mut generated_tokens = Vec::new();
+        let mut index_pos = 0;
         
-        // Add batch dimension if needed
-        let input_tensor = if input_tensor.dims().len() == 1 {
-            input_tensor.unsqueeze(0).map_err(|e| {
+        // Generate tokens incrementally
+        for index in 0..self.config.max_tokens {
+            // Determine context based on whether we're using KV cache and if this is first iteration
+            let (context_size, context_index) = if index > 0 {
+                // After first iteration, only process the last token with KV cache
+                (1, index_pos)
+            } else {
+                // First iteration: process the entire prompt
+                (tokens.len(), 0)
+            };
+            
+            // Get the context tokens to process
+            let context_tokens = &tokens[tokens.len().saturating_sub(context_size)..];
+            
+            // Create tensor from context
+            let input_tensor = Tensor::new(context_tokens, &self.device).map_err(|e| {
+                ResumeAlignerError::ModelError(format!(
+                    "Failed to create tensor from context tokens: {}", e
+                ))
+            })?
+            .unsqueeze(0).map_err(|e| {
                 ResumeAlignerError::ModelError(format!(
                     "Failed to add batch dimension: {}", e
                 ))
-            })?
-        } else {
-            input_tensor
-        };
-        
-        // Generate tokens
-        let mut generated_tokens = Vec::new();
-        let mut all_tokens = input_ids.to_vec();
-        let mut position = input_ids.len(); // Start position after the prompt
-        
-        // Initial forward pass with full prompt
-        let mut logits = self.model.forward(&input_tensor, 0)?;
-        
-        for _ in 0..self.config.max_tokens {
-            // Get last token logits
-            let last_token_logits = logits
-                .i((.., logits.dim(1)? - 1, ..))
-                .map_err(|e| {
-                    ResumeAlignerError::ModelError(format!(
-                        "Failed to extract last token logits: {}", e
-                    ))
-                })?;
+            })?;
             
-            // Apply temperature
+            // Forward pass with proper context index
+            let logits = self.model.forward(&input_tensor, context_index)?;
+            
+            // Extract logits for the last token
+            let logits = logits.squeeze(0).map_err(|e| {
+                ResumeAlignerError::ModelError(format!(
+                    "Failed to squeeze logits: {}", e
+                ))
+            })?;
+            
+            // If we have multiple sequence positions, get the last one
+            let final_logits = if logits.dims().len() == 2 {
+                // [seq_len, vocab_size] -> get last position
+                let seq_len = logits.dims()[0];
+                logits.i(seq_len - 1).map_err(|e| {
+                    ResumeAlignerError::ModelError(format!(
+                        "Failed to get last position logits: {}", e
+                    ))
+                })?
+            } else {
+                // [vocab_size] - already the right shape
+                logits
+            };
+            
+            // Apply temperature scaling
             let scaled_logits = if self.config.temperature != 1.0 {
-                (&last_token_logits / self.config.temperature).map_err(|e| {
+                (&final_logits / self.config.temperature).map_err(|e| {
                     ResumeAlignerError::ModelError(format!(
                         "Failed to apply temperature: {}", e
                     ))
                 })?
             } else {
-                last_token_logits
+                final_logits
             };
             
-            // Sample next token (simplified - using argmax for now)
-            let argmax_result = scaled_logits
-                .argmax(candle_core::D::Minus1)
-                .map_err(|e| {
+            // Sample next token using argmax
+            let next_token = scaled_logits
+                .argmax(candle_core::D::Minus1).map_err(|e| {
                     ResumeAlignerError::ModelError(format!(
-                        "Failed to sample next token: {}", e
+                        "Failed to find argmax: {}", e
+                    ))
+                })?
+                .to_scalar::<u32>().map_err(|e| {
+                    ResumeAlignerError::ModelError(format!(
+                        "Failed to convert token to u32: {}", e
                     ))
                 })?;
             
-            // Handle the case where argmax returns a tensor with dimensions
-            let next_token_id = if argmax_result.dims().len() == 0 {
-                // Scalar case
-                argmax_result.to_scalar::<u32>().map_err(|e| {
-                    ResumeAlignerError::ModelError(format!(
-                        "Failed to convert token to scalar: {}", e
-                    ))
-                })?
-            } else {
-                // Non-scalar case - get the first element
-                argmax_result.i(0).map_err(|e| {
-                    ResumeAlignerError::ModelError(format!(
-                        "Failed to index argmax result: {}", e
-                    ))
-                })?.to_scalar::<u32>().map_err(|e| {
-                    ResumeAlignerError::ModelError(format!(
-                        "Failed to convert indexed token to scalar: {}", e
-                    ))
-                })?
-            };
+            // Update position index
+            index_pos += context_tokens.len();
             
-            generated_tokens.push(next_token_id);
-            all_tokens.push(next_token_id);
-            
-            // Check for EOS token
-            if next_token_id == 32000 || next_token_id == 2 { // Common EOS token IDs
+            // Check for EOS tokens
+            if next_token == 2 || next_token == 32000 {
                 break;
             }
             
-            // Prepare input for next iteration - only use the new token
-            let next_token_tensor = Tensor::new(&[next_token_id], &self.device)
-                .map_err(|e| {
-                    ResumeAlignerError::ModelError(format!(
-                        "Failed to create next token tensor: {}", e
-                    ))
-                })?
-                .unsqueeze(0)
-                .map_err(|e| {
-                    ResumeAlignerError::ModelError(format!(
-                        "Failed to add batch dimension to next token: {}", e
-                    ))
-                })?;
-            
-            // Forward pass with just the new token and current position
-            logits = self.model.forward(&next_token_tensor, position)?;
-            position += 1; // Increment position for next iteration
+            // Add token to sequences
+            tokens.push(next_token);
+            generated_tokens.push(next_token);
         }
         
-        // Decode generated tokens
+        // Decode the generated tokens
         let generated_text = self.tokenizer.decode(&generated_tokens, true)
             .map_err(|e| {
                 ResumeAlignerError::ModelError(format!(
-                    "Failed to decode generated tokens: {}", e
+                    "Failed to decode tokens: {}", e
                 ))
             })?;
         
         let inference_time = start_time.elapsed();
-        let tokens_per_second = generated_tokens.len() as f64 / inference_time.as_secs_f64();
+        let tokens_per_second = if generated_tokens.is_empty() {
+            0.0
+        } else {
+            generated_tokens.len() as f64 / inference_time.as_secs_f64()
+        };
         
         Ok(InferenceResult {
             text: generated_text.trim().to_string(),
@@ -738,72 +780,72 @@ impl LLMEngine {
             tokens_per_second,
         })
     }
-    
-    /// Generate text from multiple prompts in batch
-    pub async fn batch_generate(&mut self, prompts: &[String]) -> Result<Vec<InferenceResult>> {
-        // For now, process sequentially. Can be optimized for true batching later
-        let mut results = Vec::new();
-        
-        for prompt in prompts {
-            let result = self.generate(prompt).await?;
-            results.push(result);
-        }
-        
-        Ok(results)
-    }
-    
-    /// Get inference configuration
-    pub fn get_config(&self) -> &InferenceConfig {
-        &self.config
-    }
-    
-    /// Update inference configuration
-    pub fn update_config(&mut self, config: InferenceConfig) {
-        self.config = config;
-    }
-    
-    /// Get model information
-    pub fn get_model_info(&self) -> ModelInferenceInfo {
-        ModelInferenceInfo {
-            vocab_size: self.model.get_vocab_size(),
-            device: format!("{:?}", self.device),
-            max_tokens: self.config.max_tokens,
-            temperature: self.config.temperature,
-        }
-    }
+   
+   /// Generate text from multiple prompts in batch
+   pub async fn batch_generate(&mut self, prompts: &[String]) -> Result<Vec<InferenceResult>> {
+       // For now, process sequentially. Can be optimized for true batching later
+       let mut results = Vec::new();
+       
+       for prompt in prompts {
+           let result = self.generate(prompt).await?;
+           results.push(result);
+       }
+       
+       Ok(results)
+   }
+   
+   /// Get inference configuration
+   pub fn get_config(&self) -> &InferenceConfig {
+       &self.config
+   }
+   
+   /// Update inference configuration
+   pub fn update_config(&mut self, config: InferenceConfig) {
+       self.config = config;
+   }
+   
+   /// Get model information
+   pub fn get_model_info(&self) -> ModelInferenceInfo {
+       ModelInferenceInfo {
+           vocab_size: self.model.get_vocab_size(),
+           device: format!("{:?}", self.device),
+           max_tokens: self.config.max_tokens,
+           temperature: self.config.temperature,
+       }
+   }
 }
 
 /// Information about the loaded model for inference
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInferenceInfo {
-    pub vocab_size: usize,
-    pub device: String,
-    pub max_tokens: usize,
-    pub temperature: f64,
+   pub vocab_size: usize,
+   pub device: String,
+   pub max_tokens: usize,
+   pub temperature: f64,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_inference_config_default() {
-        let config = InferenceConfig::default();
-        assert_eq!(config.max_tokens, 512);
-        assert_eq!(config.temperature, 0.7);
-        assert_eq!(config.batch_size, 1);
-    }
-    
-    #[test]
-    fn test_inference_result_creation() {
-        let result = InferenceResult {
-            text: "Test output".to_string(),
-            token_count: 5,
-            inference_time_ms: 100,
-            tokens_per_second: 50.0,
-        };
-        
-        assert_eq!(result.text, "Test output");
-        assert_eq!(result.token_count, 5);
-    }
+   use super::*;
+   
+   #[test]
+   fn test_inference_config_default() {
+       let config = InferenceConfig::default();
+       assert_eq!(config.max_tokens, 512);
+       assert_eq!(config.temperature, 0.7);
+       assert_eq!(config.batch_size, 1);
+   }
+   
+   #[test]
+   fn test_inference_result_creation() {
+       let result = InferenceResult {
+           text: "Test output".to_string(),
+           token_count: 5,
+           inference_time_ms: 100,
+           tokens_per_second: 50.0,
+       };
+       
+       assert_eq!(result.text, "Test output");
+       assert_eq!(result.token_count, 5);
+   }
 }

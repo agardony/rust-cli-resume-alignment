@@ -32,16 +32,28 @@ pulldown-cmark = "0.9"
 regex = "1.10"
 unicode-segmentation = "1.10"
 
-# Embeddings and ML
+# Embeddings and ML - FIXED VERSION CONFLICTS
 model2vec-rs = { git = "https://github.com/MinishLab/model2vec-rs.git" }
-candle-core = { version = "0.9.1", features = ["metal", "accelerate"] }
-candle-transformers = "0.9.1"
-candle-nn = "0.9.1"
+
+# CANDLE: Use consistent versioning (either all Git or all crates.io)
+candle-core = { version = "0.9.1", default-features = false }
+candle-transformers = { version = "0.9.1", default-features = false }
+candle-nn = { version = "0.9.1", default-features = false }
+
+# OPTIONAL: Advanced Candle features (FIXED - removed invalid cuda feature)
+candle-flash-attn = { version = "0.9.1", optional = true }
+candle-onnx = { version = "0.9.1", optional = true }
+
 hf-hub = { version = "0.3", features = ["tokio"] }
 ndarray = "0.15"
 safetensors = "0.5"
 tokenizers = "0.21"
 half = "2.0"
+
+# Platform-specific optimizations
+accelerate-src = { version = "0.3", optional = true }
+intel-mkl-src = { version = "0.8", optional = true }
+cudarc = { version = "0.12", optional = true }
 
 # String matching and analysis
 aho-corasick = "1.0"
@@ -57,13 +69,55 @@ dirs = "5.0"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Enhanced output formats  
-printpdf = "0.7"  # PDF generation
-askama = { version = "0.14", features = ["serde_json"] }  # HTML templating
+printpdf = "0.7"
+askama = { version = "0.14", features = ["serde_json"] }
 
 [features]
-default = ["metal"]
-cuda = ["candle-core/cuda"]
-metal = []  # Metal is enabled by default in dependencies
+# DEFAULT: Nothing enabled, runtime detection
+default = []
 
-# Optional CUDA support for NVIDIA GPUs
-# Enable with: cargo build --features cuda
+# METAL SUPPORT (macOS M1/M2/M3)
+metal = [
+    "candle-core/metal",
+    "candle-transformers/metal", 
+    "candle-nn/metal",
+    "accelerate-src"
+]
+
+# CUDA SUPPORT (NVIDIA)
+cuda = [
+    "candle-core/cuda", 
+    "candle-transformers/cuda", 
+    "candle-nn/cuda",
+    "cudarc"
+]
+
+# CUDNN for maximum NVIDIA performance
+cudnn = [
+    "candle-core/cudnn", 
+    "candle-transformers/cudnn", 
+    "candle-nn/cudnn",
+    "cuda"
+]
+
+# CPU OPTIMIZATIONS
+accelerate = [
+    "candle-core/accelerate",
+    "candle-nn/accelerate", 
+    "accelerate-src"
+]
+
+mkl = [
+    "candle-core/mkl",
+    "candle-nn/mkl",
+    "intel-mkl-src"
+]
+
+# SPECIALIZED FEATURES (FIXED - removed invalid features)
+flash-attn = ["candle-flash-attn"]  # Flash attention has no sub-features
+onnx = ["candle-onnx"]
+
+# CONVENIENCE COMBINATIONS
+macos = ["metal", "accelerate"]
+nvidia-max = ["cudnn", "flash-attn"]
+intel = ["mkl"]
