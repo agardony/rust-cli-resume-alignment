@@ -1,0 +1,61 @@
+[package]
+name = "resume-aligner"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "AI-powered resume and job description alignment tool"
+license = "MIT"
+keywords = ["resume", "ai", "nlp", "job-search", "alignment"]
+categories = ["command-line-utilities", "text-processing"]
+
+[lib]
+name = "resume_aligner"
+path = "src/lib.rs"
+
+[dependencies]
+# CLI and configuration
+clap = { version = "4.0", features = ["derive"] }
+toml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Text processing and extraction
+pdf-extract = "0.6"
+pulldown-cmark = "0.9"
+regex = "1.10"
+unicode-segmentation = "1.10"
+
+# Embeddings and ML
+model2vec-rs = { git = "https://github.com/MinishLab/model2vec-rs.git" }
+candle-core = "0.9.1"
+candle-transformers = "0.9.1"
+candle-nn = "0.9.1"
+hf-hub = { version = "0.3", features = ["tokio"] }
+ndarray = "0.15"
+safetensors = "0.5"
+tokenizers = "0.21"
+half = "2.0"
+
+# String matching and analysis
+aho-corasick = "1.0"
+strsim = "0.10"
+
+# Utilities
+log = "0.4"
+env_logger = "0.10"
+colored = "2.0"
+indicatif = "0.17"
+tempfile = "3.8"
+dirs = "5.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Enhanced output formats  
+printpdf = "0.7"  # PDF generation
+askama = { version = "0.14", features = ["serde_json"] }  # HTML templating

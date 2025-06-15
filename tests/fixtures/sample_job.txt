@@ -1,0 +1,34 @@
+Senior Full-Stack Developer - Remote
+TechInnovate Solutions
+
+We are seeking a highly skilled Senior Full-Stack Developer to join our growing engineering team. The ideal candidate will have extensive experience with modern web technologies and a passion for building scalable applications.
+
+Key Responsibilities:
+- Design and develop robust web applications using React and Node.js
+- Collaborate with cross-functional teams in an Agile environment
+- Implement and maintain CI/CD pipelines
+- Work with cloud infrastructure on AWS
+- Mentor junior developers and conduct code reviews
+- Optimize application performance and scalability
+
+Required Skills:
+- 5+ years of experience in full-stack development
+- Strong proficiency in JavaScript, React, and Node.js
+- Experience with RESTful API design and development
+- Knowledge of database systems (PostgreSQL, MongoDB)
+- Familiarity with containerization (Docker, Kubernetes)
+- Experience with version control (Git) and CI/CD tools
+- Strong problem-solving and communication skills
+
+Preferred Qualifications:
+- Experience with Python or other backend languages
+- Knowledge of microservices architecture
+- AWS cloud services experience
+- Bachelor's degree in Computer Science or related field
+
+What We Offer:
+- Competitive salary and equity package
+- Remote work flexibility
+- Professional development opportunities
+- Health and wellness benefits
+
