@@ -40,7 +40,7 @@ candle-core = { git = "https://github.com/huggingface/candle.git", default-featu
 candle-transformers = { git = "https://github.com/huggingface/candle.git", default-features = false }
 candle-nn = { git = "https://github.com/huggingface/candle.git", default-features = false }
 
-# OPTIONAL: Advanced Candle features (FIXED - removed invalid cuda feature)
+# OPTIONAL: Advanced Candle features
 candle-flash-attn = { git = "https://github.com/huggingface/candle.git", optional = true }
 candle-onnx = { git = "https://github.com/huggingface/candle.git", optional = true }
 
@@ -53,7 +53,9 @@ half = "2.0"
 # Platform-specific optimizations
 accelerate-src = { version = "0.3", optional = true }
 intel-mkl-src = { version = "0.8", optional = true }
-cudarc = { version = "0.12", optional = true }
+
+# CUDA: Use older version to avoid feature conflicts
+cudarc = { version = "0.16.4", optional = true, default-features = false, features = ["cuda-version-from-build-system"] }
 
 # String matching and analysis
 aho-corasick = "1.0"
@@ -84,20 +86,12 @@ metal = [
     "accelerate-src"
 ]
 
-# CUDA SUPPORT (NVIDIA)
+# CUDA SUPPORT (NVIDIA) - using older cudarc
 cuda = [
     "candle-core/cuda", 
     "candle-transformers/cuda", 
     "candle-nn/cuda",
     "cudarc"
-]
-
-# CUDNN for maximum NVIDIA performance
-cudnn = [
-    "candle-core/cudnn", 
-    "candle-transformers/cudnn", 
-    "candle-nn/cudnn",
-    "cuda"
 ]
 
 # CPU OPTIMIZATIONS
@@ -113,11 +107,10 @@ mkl = [
     "intel-mkl-src"
 ]
 
-# SPECIALIZED FEATURES (FIXED - removed invalid features)
-flash-attn = ["candle-flash-attn"]  # Flash attention has no sub-features
+# SPECIALIZED FEATURES
+flash-attn = ["candle-flash-attn"]
 onnx = ["candle-onnx"]
 
 # CONVENIENCE COMBINATIONS
 macos = ["metal", "accelerate"]
-nvidia-max = ["cudnn", "flash-attn"]
 intel = ["mkl"]
