@@ -80,7 +80,7 @@ impl Default for Config {
             models: ModelConfig {
                 models_dir,
                 default_embedding_model: "potion-base-8M".to_string(),
-                default_llm_model: "microsoft/Phi-3-mini-4k-instruct".to_string(),
+                default_llm_model: "microsoft/Phi-4-mini-instruct".to_string(),
                 available_models: vec![
                     // Potion embedding models (recommended)
                     AvailableModel {
@@ -107,11 +107,11 @@ impl Default for Config {
                     },
                     // LLM models
                     AvailableModel {
-                        name: "phi-3-mini".to_string(),
-                        repo_id: "microsoft/Phi-3-mini-4k-instruct".to_string(),
+                        name: "phi-4-mini".to_string(),
+                        repo_id: "microsoft/Phi-4-mini-instruct".to_string(),
                         model_type: ModelType::LLM,
-                        size_mb: 2300,
-                        description: "Small but capable model for development".to_string(),
+                        size_mb: 2800,
+                        description: "Latest small but capable model with improved performance".to_string(),
                     },
                     AvailableModel {
                         name: "llama-3.1-8b".to_string(),

@@ -35,14 +35,14 @@ unicode-segmentation = "1.10"
 # Embeddings and ML - FIXED VERSION CONFLICTS
 model2vec-rs = { git = "https://github.com/MinishLab/model2vec-rs.git" }
 
-# CANDLE: Use consistent versioning (either all Git or all crates.io)
-candle-core = { version = "0.9.1", default-features = false }
-candle-transformers = { version = "0.9.1", default-features = false }
-candle-nn = { version = "0.9.1", default-features = false }
+# CANDLE: Use Git version to fix compilation issues
+candle-core = { git = "https://github.com/huggingface/candle.git", default-features = false }
+candle-transformers = { git = "https://github.com/huggingface/candle.git", default-features = false }
+candle-nn = { git = "https://github.com/huggingface/candle.git", default-features = false }
 
 # OPTIONAL: Advanced Candle features (FIXED - removed invalid cuda feature)
-candle-flash-attn = { version = "0.9.1", optional = true }
-candle-onnx = { version = "0.9.1", optional = true }
+candle-flash-attn = { git = "https://github.com/huggingface/candle.git", optional = true }
+candle-onnx = { git = "https://github.com/huggingface/candle.git", optional = true }
 
 hf-hub = { version = "0.3", features = ["tokio"] }
 ndarray = "0.15"

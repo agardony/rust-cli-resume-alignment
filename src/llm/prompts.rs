@@ -1,7 +1,6 @@
 //! Ultra-optimized single prompt for comprehensive resume analysis
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Single optimized prompt template
 #[derive(Debug, Clone)]
@@ -85,11 +84,6 @@ mod tests {
         let params = PromptParams {
             resume_content: "Software Engineer with Python experience at Tech Corp.".to_string(),
             job_content: "Senior Software Engineer role requiring React and Python.".to_string(),
-            missing_keywords: vec![], 
-            exact_matches: vec![],     
-            section_scores: HashMap::new(), 
-            overall_score: 0.75,      
-            focus_area: None,         
         };
         
         let prompt = templates.render_combined_analysis(&params);
@@ -116,11 +110,6 @@ mod tests {
         let params = PromptParams {
             resume_content: "Test Resume Content".to_string(),
             job_content: "Test Job Content".to_string(),
-            missing_keywords: vec![],
-            exact_matches: vec![],
-            section_scores: HashMap::new(),
-            overall_score: 0.0,
-            focus_area: None,
         };
         
         let prompt = templates.render_combined_analysis(&params);

@@ -478,14 +478,12 @@ async fn run_command(command: Commands, config: Config) -> Result<()> {
                         
                         for model_info in model_manager.list_available_models() {
                             // Get the model key/ID for matching
-                            let model_key = if model_info.repo_id.contains("Phi-3-mini") {
-                                "phi-3-mini"
+                            let model_key = if model_info.repo_id.contains("Phi-4-mini") {
+                                "phi-4-mini"
                             } else if model_info.repo_id.contains("Llama-3.2") {
                                 "llama-3.2-3b"
                             } else if model_info.repo_id.contains("Llama-3.1") {
                                 "llama-3.1-8b"
-                            } else if model_info.repo_id.contains("TinyLlama") {
-                                "tinyllama"
                             } else {
                                 "unknown"
                             };
@@ -503,14 +501,12 @@ async fn run_command(command: Commands, config: Config) -> Result<()> {
                             println!("    {}", model_info.description);
                             
                             // Show model ID for download commands
-                            let model_id = if model_info.repo_id.contains("Phi-3-mini") {
-                                "phi-3-mini"
+                            let model_id = if model_info.repo_id.contains("Phi-4-mini") {
+                                "phi-4-mini"
                             } else if model_info.repo_id.contains("Llama-3.2") {
                                 "llama-3.2-3b"
                             } else if model_info.repo_id.contains("Llama-3.1") {
                                 "llama-3.1-8b"
-                            } else if model_info.repo_id.contains("TinyLlama") {
-                                "tinyllama"
                             } else {
                                 "unknown"
                             };
@@ -523,10 +519,10 @@ async fn run_command(command: Commands, config: Config) -> Result<()> {
                         
                         if downloaded_models.is_empty() {
                             println!("\n💡 No models downloaded yet. Get started with:");
-                            println!("   resume-aligner models download phi-3-mini");
-                            println!("\n🎯 Recommended for beginners: phi-3-mini (2.3 GB)");
+                            println!("   resume-aligner models download phi-4-mini");
+                            println!("\n🎯 Recommended for beginners: phi-4-mini (2.8 GB)");
                             println!("🚀 Best quality: llama-3.1-8b (8 GB)");
-                            println!("💾 Smallest size: tinyllama (1.1 GB)");
+                            println!("⚡ Optimal balance: llama-3.2-3b (3.1 GB)");
                         }
                     }
                 }

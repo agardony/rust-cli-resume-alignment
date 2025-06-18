@@ -20,10 +20,9 @@ pub struct ModelInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ModelType {
-    Phi3Mini,
+    Phi4Mini,
     Llama31,
     Llama32,
-    TinyLlama,
     Qwen,
 }
 
@@ -69,19 +68,20 @@ impl ModelManager {
     
     /// Initialize the list of available models
     fn init_available_models(&mut self) {
-        // Microsoft Phi-3-mini (development/testing)
+        // Microsoft Phi-4-mini (advanced development/testing)
         self.available_models.insert(
-            "phi-3-mini".to_string(),
+            "phi-4-mini".to_string(),
             ModelInfo {
-                name: "Phi-3-mini-4k-instruct".to_string(),
-                repo_id: "microsoft/Phi-3-mini-4k-instruct".to_string(),
-                size_mb: 2300, // ~2.3GB
-                description: "Lightweight instruction-tuned model for development".to_string(),
-                model_type: ModelType::Phi3Mini,
+                name: "Phi-4-mini-instruct".to_string(),
+                repo_id: "microsoft/Phi-4-mini-instruct".to_string(),
+                size_mb: 2800, // ~2.8GB
+                description: "Latest lightweight instruction-tuned model with improved performance".to_string(),
+                model_type: ModelType::Phi4Mini,
                 capabilities: vec![
                     "instruction-following".to_string(),
                     "text-analysis".to_string(),
                     "resume-analysis".to_string(),
+                    "reasoning".to_string(),
                 ],
             },
         );
@@ -123,21 +123,6 @@ impl ModelManager {
             },
         );
         
-        // TinyLlama (fallback for resource-constrained environments)
-        self.available_models.insert(
-            "tinyllama".to_string(),
-            ModelInfo {
-                name: "TinyLlama-1.1B-Chat".to_string(),
-                repo_id: "TinyLlama/TinyLlama-1.1B-Chat-v1.0".to_string(),
-                size_mb: 1100, // ~1.1GB
-                description: "Ultra-lightweight model for basic analysis".to_string(),
-                model_type: ModelType::TinyLlama,
-                capabilities: vec![
-                    "basic-analysis".to_string(),
-                    "text-generation".to_string(),
-                ],
-            },
-        );
     }
     
     /// Scan for already downloaded models
@@ -363,7 +348,7 @@ impl ModelManager {
     pub async fn auto_select_model(&self) -> Result<String> {
         // Priority order: downloaded models first, then by capability
         // Llama-3.2-3B is now the preferred default for M Series Macs
-        let preferred_order = ["llama-3.2-3b", "phi-3-mini", "tinyllama", "llama-3.1-8b"];
+        let preferred_order = ["llama-3.2-3b", "phi-4-mini", "llama-3.1-8b"];
         
         // First, try to find a downloaded model in preference order
         for model_id in &preferred_order {
@@ -408,6 +393,6 @@ mod tests {
         let manager = ModelManager::new(temp_dir.path().to_path_buf()).await.unwrap();
         
         let selected = manager.auto_select_model().await.unwrap();
-        assert_eq!(selected, "phi-3-mini");
+        assert_eq!(selected, "llama-3.2-3b");
     }
 }

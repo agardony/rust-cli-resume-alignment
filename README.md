@@ -11,7 +11,7 @@
 ### 🔍 **Multi-Modal Analysis**
 - **Semantic Analysis**: Model2Vec embeddings for deep text understanding
 - **ATS Keyword Matching**: Exact and fuzzy matching with 80+ skill database
-- **LLM Insights**: Local AI analysis with Llama 3.2, Phi-3, Llama 3.1, or TinyLlama models
+- **LLM Insights**: Local AI analysis with Llama 3.2, Phi-4, or Llama 3.1 models
 - **Weighted Scoring**: Configurable 30/40/30 split (embeddings/keywords/LLM)
 
 ### 📄 **File Format Support**
@@ -21,9 +21,8 @@
 
 ### 🤖 **Local AI Models**
 - **Llama 3.2 3B**: 3.1GB - **DEFAULT**
-- **Phi-3-mini**: 2.3GB - Lightweight instruction-tuned model
+- **Phi-4-mini**: 2.8GB - Latest lightweight instruction-tuned model
 - **Llama 3.1 8B**: 8GB - High-quality production model
-- **TinyLlama**: 1.1GB - Ultra-lightweight for basic analysis
 - **Automatic Model Management**: Seamless download and caching
 
 ### 🎨 **Rich Output Formats**
@@ -66,9 +65,9 @@ cargo install --path .
 resume-aligner align --resume resume.pdf --job job.txt
 
 # Or explicitly download your preferred model
-resume-aligner models download phi-3-mini  # Recommended for beginners
+resume-aligner models download phi-4-mini   # Recommended for beginners
 resume-aligner models download llama-3.1-8b  # Best quality
-resume-aligner models download tinyllama     # Smallest size
+resume-aligner models download llama-3.2-3b  # Optimal balance
 ```
 
 ### Basic Usage
@@ -78,7 +77,7 @@ resume-aligner models download tinyllama     # Smallest size
 resume-aligner align --resume resume.pdf --job job.txt
 
 # Detailed analysis with specific model
-resume-aligner align --resume resume.pdf --job job.txt --llm phi-3-mini --detailed
+resume-aligner align --resume resume.pdf --job job.txt --llm phi-4-mini --detailed
 
 # Generate HTML report (perfect for sharing)
 resume-aligner align --resume resume.pdf --job job.txt --output html --save report.html
@@ -94,9 +93,8 @@ resume-aligner align --resume resume.pdf --job job.txt --output json --save anal
 | Model | Size | Best For | Download Command |
 |-------|------|----------|------------------|
 | **Llama 3.2 3B** | 3.1GB | **DEFAULT** | `models download llama-3.2-3b` |
-| **Phi-3-mini** | 2.3GB | Lightweight, instruction-tuned | `models download phi-3-mini` |
+| **Phi-4-mini** | 2.8GB | Latest lightweight, instruction-tuned | `models download phi-4-mini` |
 | **Llama 3.1 8B** | 8GB | Production, highest quality | `models download llama-3.1-8b` |
-| **TinyLlama** | 1.1GB | Ultra-lightweight, basic analysis | `models download tinyllama` |
 
 ### Model Commands
 
@@ -105,16 +103,16 @@ resume-aligner align --resume resume.pdf --job job.txt --output json --save anal
 resume-aligner models list
 
 # Download a specific model
-resume-aligner models download phi-3-mini
+resume-aligner models download phi-4-mini
 
 # Get model information
-resume-aligner models info phi-3-mini
+resume-aligner models info phi-4-mini
 
 # Remove a downloaded model
-resume-aligner models remove phi-3-mini
+resume-aligner models remove phi-4-mini
 
 # Force re-download
-resume-aligner models download phi-3-mini --force
+resume-aligner models download phi-4-mini --force
 ```
 
 ### Automatic Model Download
@@ -236,7 +234,7 @@ huggingface-cli login
 [models]
 models_dir = "~/.resume-aligner/models"
 default_embedding_model = "minishlab/M2V_base_output"
-default_llm_model = "microsoft/Phi-3-mini-4k-instruct"
+default_llm_model = "microsoft/Phi-4-mini-instruct"
 
 [processing]
 chunk_size = 512
@@ -383,8 +381,8 @@ Model validation failed
 ```
 **Solution**: Remove the model and re-download:
 ```bash
-resume-aligner models remove phi-3-mini
-resume-aligner models download phi-3-mini
+resume-aligner models remove phi-4-mini
+resume-aligner models download phi-4-mini
 ```
 
 ### General Issues
@@ -395,7 +393,7 @@ resume-aligner models download phi-3-mini
 - Check file permissions
 
 #### Memory Issues
-- Use `tinyllama` model for low-memory systems
+- Use `phi-4-mini` model for low-memory systems
 - Close other applications during analysis
 - Consider increasing system swap space
 
@@ -512,7 +510,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[Model2Vec](https://github.com/MinishLab/model2vec-rs)**: Fast, efficient embeddings
 - **[Candle](https://github.com/huggingface/candle)**: Rust-native ML framework
 - **[Hugging Face](https://huggingface.co/)**: Model hosting and distribution
-- **[Microsoft](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct)**: Phi-3 model
+- **[Microsoft](https://huggingface.co/microsoft/Phi-4-mini-instruct)**: Phi-4 model
 - **[Meta](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct)**: Llama 3.1 model
 
 ## 📞 Support

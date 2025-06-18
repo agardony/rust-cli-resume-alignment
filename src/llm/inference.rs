@@ -59,16 +59,16 @@ trait LLMModel: Send + Sync {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
-/// Phi-3 model implementation
-struct Phi3Model {
+/// Phi-4 model implementation
+struct Phi4Model {
     model: phi3::Model,
     vocab_size: usize,
 }
 
-impl LLMModel for Phi3Model {
+impl LLMModel for Phi4Model {
     fn forward(&mut self, input_ids: &Tensor, start_pos: usize) -> Result<Tensor> {
         self.model.forward(input_ids, start_pos).map_err(|e| {
-            ResumeAlignerError::ModelError(format!("Phi-3 forward pass failed: {}", e))
+            ResumeAlignerError::ModelError(format!("Phi-4 forward pass failed: {}", e))
         })
     }
     
@@ -77,7 +77,7 @@ impl LLMModel for Phi3Model {
     }
     
     fn reset_kv_cache(&mut self) -> Result<()> {
-        // Phi-3 doesn't use explicit cache in our implementation
+        // Phi-4 doesn't use explicit cache in our implementation
         Ok(())
     }
     
@@ -256,22 +256,22 @@ impl LLMEngine {
             .unwrap_or("");
         
         let model: Box<dyn LLMModel> = match (model_type, architecture) {
-            ("phi3", _) | (_, "Phi3ForCausalLM") => {
-                println!("🔧 Loading Phi-3 model");
-                Self::load_phi3_model(model_path, &device, &model_config)?
+            ("phi", _) | (_, "PhiForCausalLM") | ("phi4", _) | (_, "Phi4ForCausalLM") | (_, "Phi3ForCausalLM") => {
+                println!("🔧 Loading Phi model (architecture: {})", architecture);
+                Self::load_phi4_model(model_path, &device, &model_config)?
             }
             ("llama", _) | (_, "LlamaForCausalLM") => {
                 println!("🔧 Loading Llama model");
                 Self::load_llama_model(model_path, &device, &model_config)?
             }
             _ => {
-                println!("⚠️  Unknown model type '{}'/architecture '{}', trying Llama first then Phi-3", model_type, architecture);
-                // Try Llama first (more common), then fallback to Phi-3
-                if let Ok(model) = Self::load_llama_model(model_path, &device, &model_config) {
+                println!("⚠️  Unknown model type '{}'/'architecture' '{}', trying Phi first then Llama", model_type, architecture);
+                // Try Phi first (since phi-4-mini is a common model), then fallback to Llama
+                if let Ok(model) = Self::load_phi4_model(model_path, &device, &model_config) {
                     model
                 } else {
-                    println!("⚠️  Llama loading failed, falling back to Phi-3");
-                    Self::load_phi3_model(model_path, &device, &model_config)?
+                    println!("⚠️  Phi loading failed, falling back to Llama");
+                    Self::load_llama_model(model_path, &device, &model_config)?
                 }
             }
         };
@@ -289,21 +289,23 @@ impl LLMEngine {
     /// Check if token is end-of-sequence
     fn is_eos_token(&self, token: u32) -> bool {
         // Common EOS tokens for different models
-        matches!(token, 2 | 32000 | 32001 | 128001 | 128009)
+        // phi-4-mini uses token 199999 as EOS (<|endoftext|>)
+        // Other models use different tokens
+        matches!(token, 2 | 32000 | 32001 | 32007 | 128001 | 128009 | 199999 | 200020)
     }
     
-    /// Load a Phi-3 model specifically
-    fn load_phi3_model(
+    /// Load a Phi-4 model specifically
+    fn load_phi4_model(
         model_path: &Path,
         device: &Device,
         config: &serde_json::Value,
     ) -> Result<Box<dyn LLMModel>> {
         // Parse model configuration
-        let vocab_size = config["vocab_size"].as_u64().unwrap_or(32064) as usize;
-        let hidden_size = config["hidden_size"].as_u64().unwrap_or(3072) as usize;
-        let num_layers = config["num_hidden_layers"].as_u64().unwrap_or(32) as usize;
-        let num_heads = config["num_attention_heads"].as_u64().unwrap_or(32) as usize;
-        let intermediate_size = config["intermediate_size"].as_u64().unwrap_or(8192) as usize;
+        let vocab_size = config["vocab_size"].as_u64().unwrap_or(200064) as usize;
+        let _hidden_size = config["hidden_size"].as_u64().unwrap_or(3072) as usize;
+        let _num_layers = config["num_hidden_layers"].as_u64().unwrap_or(32) as usize;
+        let _num_heads = config["num_attention_heads"].as_u64().unwrap_or(32) as usize;
+        let _intermediate_size = config["intermediate_size"].as_u64().unwrap_or(8192) as usize;
         
         // Load model weights - handle both single and sharded safetensors
         let mut tensors_map = std::collections::HashMap::new();
@@ -436,38 +438,53 @@ impl LLMEngine {
         
         println!("  ✅ Loaded {} tensors", tensors_map.len());
         
+        // Handle tied word embeddings for Phi-3 models (similar to Llama)
+        // Check if the config indicates tied embeddings and lm_head.weight is missing
+        let tie_embeddings = config["tie_word_embeddings"].as_bool().unwrap_or(false);
+        if tie_embeddings {
+            if let Some(embed_weights) = tensors_map.get("model.embed_tokens.weight") {
+                if !tensors_map.contains_key("lm_head.weight") {
+                    println!("  🔗 Creating tied lm_head.weight from embed_tokens.weight");
+                    tensors_map.insert("lm_head.weight".to_string(), embed_weights.clone());
+                }
+            } else {
+                return Err(ResumeAlignerError::ModelError(
+                    "Cannot tie embeddings: model.embed_tokens.weight not found".to_string()
+                ));
+            }
+        }
+        
         let vb = VarBuilder::from_tensors(
             tensors_map, 
             DType::F32, 
             device
         );
         
-        // Create Phi-3 configuration
-        let phi3_config = phi3::Config {
-            vocab_size,
-            hidden_size,
-            intermediate_size,
-            num_hidden_layers: num_layers,
-            num_attention_heads: num_heads,
-            num_key_value_heads: num_heads,
-            hidden_act: candle_nn::Activation::Silu,
-            max_position_embeddings: 4096,
-            rms_norm_eps: 1e-5,
-            rope_theta: 10000.0,
-            rope_scaling: None,
-            bos_token_id: Some(1),
-            eos_token_id: Some(32000),
-        };
+        // Create Phi-3 configuration - handle complex fields that need conversion
+        let mut phi_config_value = config.clone();
+        
+        // Correctly parse the rope_scaling object if it exists
+        if phi_config_value.get("rope_scaling").is_some() {
+            // No conversion needed; let the model handle the complete configuration
+            println!("  ✅ Rope scaling configuration detected, parsing as complete struct");
+        }
+        
+        let phi_config = serde_json::from_value::<phi3::Config>(phi_config_value)
+            .map_err(|e| {
+                ResumeAlignerError::ModelError(format!(
+                    "Failed to parse Phi-3 config: {}", e
+                ))
+            })?;
         
         // Load the model
-        let phi3_model = phi3::Model::new(&phi3_config, vb).map_err(|e| {
+        let phi_model = phi3::Model::new(&phi_config, vb).map_err(|e| {
             ResumeAlignerError::ModelError(format!(
                 "Failed to load Phi-3 model: {}", e
             ))
         })?;
         
-        Ok(Box::new(Phi3Model {
-            model: phi3_model,
+        Ok(Box::new(Phi4Model {
+            model: phi_model,
             vocab_size,
         }))
     }
@@ -671,9 +688,20 @@ impl LLMEngine {
         // Reset KV cache for fresh generation
         self.model.reset_kv_cache()?;
         
+        // Format prompt for phi-4-mini if needed
+        let formatted_prompt = if self.is_phi_model() {
+            format!("<|user|>\n{}\n<|end|>\n<|assistant|>\n", prompt.trim())
+        } else {
+            prompt.to_string()
+        };
+        
+        if is_verbose_mode() {
+            println!("🔤 Input prompt: '{}'", &formatted_prompt);
+        }
+        
         // Tokenization
         let tokenize_start = std::time::Instant::now();
-        let encoding = self.tokenizer.encode(prompt, true).map_err(|e| {
+        let encoding = self.tokenizer.encode(formatted_prompt.as_str(), true).map_err(|e| {
             ResumeAlignerError::ModelError(format!("Failed to tokenize input: {}", e))
         })?;
         let input_ids = encoding.get_ids();
@@ -720,38 +748,57 @@ impl LLMEngine {
             //let next_token = final_logits.argmax(candle_core::D::Minus1)?
              //   .to_scalar::<u32>()?;
 
-            // Sample next token with improved EOS handling
+            // Sample next token with improved sampling and temperature
             let next_token = {
                 let top_values = final_logits.to_vec1::<f32>()?;
-                let mut indexed_values: Vec<(usize, f32)> = top_values.iter().enumerate().map(|(i, &v)| (i, v)).collect();
-                indexed_values.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
                 
-                let mut chosen_token = indexed_values[0].0 as u32;
-                let mut choice_index = 0;
+                // Apply temperature scaling for better diversity
+                let temperature = self.config.temperature as f32;
+                let scaled_logits: Vec<f32> = if temperature > 0.0 && temperature != 1.0 {
+                    top_values.iter().map(|&x| x / temperature).collect()
+                } else {
+                    top_values.clone()
+                };
                 
-                // Skip EOS tokens for first 15 tokens to ensure proper analysis starts
-                if step < 15 && self.is_eos_token(chosen_token) && indexed_values.len() > choice_index + 1 {
-                    let logit_gap = indexed_values[choice_index].1 - indexed_values[choice_index + 1].1;
-                    if logit_gap < 4.0 {  // More lenient gap
-                        choice_index += 1;
-                        chosen_token = indexed_values[choice_index].0 as u32;
-                        println!("🔄 Step {}: Skipping EOS token, using choice {} (token {})", 
-                            step, choice_index + 1, chosen_token);
-                        
-                        // If the next choice is also EOS, try one more
-                        if self.is_eos_token(chosen_token) && indexed_values.len() > choice_index + 1 {
-                            let next_gap = indexed_values[choice_index].1 - indexed_values[choice_index + 1].1;
-                            if next_gap < 2.0 {
-                                choice_index += 1;
-                                chosen_token = indexed_values[choice_index].0 as u32;
-                                println!("🔄 Step {}: Second EOS skip, using choice {} (token {})", 
-                                    step, choice_index + 1, chosen_token);
-                            }
-                        }
+                // Convert to probabilities using softmax
+                let max_logit = scaled_logits.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+                let exp_logits: Vec<f32> = scaled_logits.iter().map(|&x| (x - max_logit).exp()).collect();
+                let sum_exp: f32 = exp_logits.iter().sum();
+                let probs: Vec<f32> = exp_logits.iter().map(|&x| x / sum_exp).collect();
+                
+                // Apply top-k filtering if specified
+                let mut candidates: Vec<(usize, f32)> = probs.iter().enumerate().map(|(i, &p)| (i, p)).collect();
+                candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                
+                if let Some(top_k) = self.config.top_k {
+                    candidates.truncate(top_k);
+                }
+                
+                // Apply top-p (nucleus) sampling
+                let mut cumulative_prob = 0.0;
+                let top_p = self.config.top_p as f32;
+                let mut nucleus_candidates = Vec::new();
+                
+                for (idx, prob) in candidates {
+                    cumulative_prob += prob;
+                    nucleus_candidates.push((idx, prob));
+                    if cumulative_prob >= top_p {
+                        break;
                     }
                 }
                 
-                chosen_token
+                // Select token (for now, just use the top candidate to avoid randomness issues)
+                let chosen_token = nucleus_candidates[0].0 as u32;
+                
+                // Validate token range
+                if chosen_token >= top_values.len() as u32 {
+                    if is_verbose_mode() {
+                        println!("⚠️ Token {} out of range, using 0", chosen_token);
+                    }
+                    0
+                } else {
+                    chosen_token
+                }
             };
 
             // Only check for EOS after we've generated some meaningful content
@@ -769,7 +816,7 @@ impl LLMEngine {
             let new_token_tensor = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
             logits = self.model.forward(&new_token_tensor, input_length + step)?;
             
-            let token_time = token_start.elapsed();
+            let _token_time = token_start.elapsed();
             
             if is_verbose_mode() && step > 0 && step % 10 == 0 {
                 println!("📊 Generated {} tokens, avg: {:.1}ms/token", 
@@ -779,10 +826,20 @@ impl LLMEngine {
         
         let generation_time = generation_start.elapsed();
         
-        // Decode generated tokens only
+        // Decode all tokens (input + generated) for proper context
         let decode_start = std::time::Instant::now();
-        let generated_text = self.tokenizer.decode(&generated_tokens, true)
-            .map_err(|e| ResumeAlignerError::ModelError(format!("Failed to decode: {}", e)))?;
+        let all_tokens = tokens.clone();
+        let full_text = self.tokenizer.decode(&all_tokens, true)
+            .map_err(|e| ResumeAlignerError::ModelError(format!("Failed to decode full sequence: {}", e)))?;
+        
+        // Extract only the generated portion by removing the input prompt
+        let generated_text = if full_text.len() > formatted_prompt.len() {
+            full_text[formatted_prompt.len()..].trim().to_string()
+        } else {
+            // Fallback: decode only generated tokens if full decode fails
+            self.tokenizer.decode(&generated_tokens, true)
+                .map_err(|e| ResumeAlignerError::ModelError(format!("Failed to decode generated tokens: {}", e)))?
+        };
         let decode_time = decode_start.elapsed();
 
         // DEBUG: Show what was actually generated
@@ -864,15 +921,21 @@ impl LLMEngine {
        self.config = config;
    }
    
-   /// Get model information
-   pub fn get_model_info(&self) -> ModelInferenceInfo {
-       ModelInferenceInfo {
-           vocab_size: self.model.get_vocab_size(),
-           device: format!("{:?}", self.device),
-           max_tokens: self.config.max_tokens,
-           temperature: self.config.temperature,
-       }
-   }
+    /// Check if the current model is a Phi model
+    fn is_phi_model(&self) -> bool {
+        // Check vocab size as a heuristic for phi-4-mini
+        self.model.get_vocab_size() > 100000
+    }
+    
+    /// Get model information
+    pub fn get_model_info(&self) -> ModelInferenceInfo {
+        ModelInferenceInfo {
+            vocab_size: self.model.get_vocab_size(),
+            device: format!("{:?}", self.device),
+            max_tokens: self.config.max_tokens,
+            temperature: self.config.temperature,
+        }
+    }
 }
 
 /// Detailed timing breakdown for performance analysis

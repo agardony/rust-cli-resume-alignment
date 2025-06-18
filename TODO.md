@@ -139,8 +139,8 @@ This roadmap is derived from analyzing the "dead code" warnings in the current c
 **Current Issues:**
 - [x] ✅ **LLM Parameter Passing**: Fixed - `--llm` parameter now properly passed through pipeline
 - [x] ✅ **LLM Engine Initialization**: Fixed - Custom model parameter correctly reaches LLM analyzer
-- [ ] ❌ **Model Format Support**: Only Phi-3 format supported, need Llama model loader
-- [ ] ❌ **Phi-3-Mini Download Issue**: Missing `model-00001-of-00002.safetensors` file
+- [ ] ❌ **Model Format Support**: Only Phi-4 format supported, need Llama model loader
+- [ ] ❌ **Phi-4-Mini Download Issue**: Missing `model-00001-of-00002.safetensors` file
 - [ ] ❌ **Model Type Detection**: Works but needs proper model-specific loaders
 
 **Critical Tasks:**

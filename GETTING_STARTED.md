@@ -107,14 +107,14 @@ cargo build --release
 
 ### **Download a Lightweight Model**
 ```bash
-# Download smallest model (1.1 GB)
-./target/release/resume-aligner models download tinyllama
+# Download newest lightweight model (2.8 GB)
+./target/release/resume-aligner models download phi-4-mini
 
 # Then run full analysis with AI
 ./target/release/resume-aligner align \
   --resume tests/fixtures/sample_resume.txt \
   --job tests/fixtures/sample_job.txt \
-  --llm tinyllama
+  --llm phi-4-mini
 ```
 
 ### **Check Available Models**
@@ -123,7 +123,7 @@ cargo build --release
 ./target/release/resume-aligner models list
 
 # Get detailed model info
-./target/release/resume-aligner models info phi-3-mini
+./target/release/resume-aligner models info phi-4-mini
 ```
 
 ---
@@ -249,7 +249,7 @@ cargo build --release
 
 1. **Try the basic analysis** with sample files
 2. **Test with your own resume** and job postings
-3. **Download a small model** (tinyllama) for AI features
+3. **Download a model** (phi-4-mini) for AI features
 4. **Explore different output formats** (JSON, detailed)
 5. **Check the [TODO.md](TODO.md)** for upcoming features
 
