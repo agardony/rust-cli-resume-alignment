@@ -58,7 +58,7 @@ async fn run_command(command: Commands, config: Config) -> Result<()> {
             embedding,
             detailed,
             output,
-            save: _,
+            save,
             no_llm,
         } => {
             info!("Starting resume alignment analysis");
@@ -289,105 +289,166 @@ async fn run_command(command: Commands, config: Config) -> Result<()> {
             let alignment_report = if no_llm {
                 analysis_engine.analyze_alignment(&processed_resume, &processed_job).await?
             } else {
-                analysis_engine.analyze_alignment_with_llm(&processed_resume, &processed_job, llm).await?
+                analysis_engine.analyze_alignment_with_llm(&processed_resume, &processed_job, llm.clone()).await?
             };
             
-            // Display comprehensive results
-            println!("\n🎉 Comprehensive Analysis Results:");
-            println!("\n📊 Overall Alignment Score: {:.1}%", alignment_report.overall_score * 100.0);
-            
-            println!("\n📈 Component Scores:");
-            println!("  • Semantic Similarity: {:.1}%", alignment_report.embedding_score * 100.0);
-            println!("  • ATS Keyword Score: {:.1}%", alignment_report.ats_score * 100.0);
-            if let Some(llm_score) = alignment_report.llm_score {
-                println!("  • LLM Analysis Score: {:.1}%", llm_score * 100.0);
-            }
-            
-            println!("\n🎯 Keyword Analysis:");
-            println!("  • Keyword Coverage: {:.1}%", alignment_report.keyword_analysis.keyword_coverage * 100.0);
-            println!("  • Exact Matches: {}", alignment_report.keyword_analysis.exact_matches.len());
-            println!("  • Fuzzy Matches: {}", alignment_report.keyword_analysis.fuzzy_matches.len());
-            
-            println!("\n🧠 Semantic Analysis:");
-            println!("  • Document Similarity: {:.1}%", alignment_report.semantic_analysis.overall_similarity * 100.0);
-            println!("  • Average Chunk Similarity: {:.1}%", alignment_report.semantic_analysis.chunk_similarity_average * 100.0);
-            println!("  • Embedding Dimensions: {}", alignment_report.semantic_analysis.embedding_dimension);
-            
-            if detailed {
-                println!("\n🎯 Top Keyword Matches:");
-                for (i, keyword) in alignment_report.keyword_analysis.exact_matches.iter().take(10).enumerate() {
-                    println!("  {}. {} (count: {}, importance: {:?})", 
-                        i + 1, keyword.keyword, keyword.count, keyword.importance);
-                }
+            println!("\n✅ Phase 4 (Comprehensive Analysis) completed successfully!");
+
+            // Phase 5: LLM Analysis (if enabled)
+            let llm_analysis = if !no_llm {
+                println!("\n🔄 Phase 5: Starting LLM analysis...");
                 
-                if !alignment_report.keyword_analysis.fuzzy_matches.is_empty() {
-                    println!("\n🔍 Top Fuzzy Matches:");
-                    for (i, fuzzy) in alignment_report.keyword_analysis.fuzzy_matches.iter().take(5).enumerate() {
-                        println!("  {}. '{}' matches '{}' ({:.1}% similarity)", 
-                            i + 1, fuzzy.matched_text, fuzzy.original_keyword, fuzzy.similarity_score * 100.0);
-                    }
-                }
-                
-                println!("\n📊 Section Analysis:");
-                for (section_name, section_score) in &alignment_report.section_analysis.section_scores {
-                    println!("  • {}: {:.1}% (embedding: {:.1}%, keywords: {:.1}%)",
-                        section_name,
-                        section_score.combined_score * 100.0,
-                        section_score.embedding_score * 100.0,
-                        section_score.keyword_score * 100.0
-                    );
-                }
-                
-                if !alignment_report.section_analysis.strength_sections.is_empty() {
-                    println!("\n💪 Strength Sections:");
-                    for section in &alignment_report.section_analysis.strength_sections {
-                        println!("  • {}", section);
-                    }
-                }
-                
-                if !alignment_report.section_analysis.missing_sections.is_empty() {
-                    println!("\n⚠️  Missing Sections:");
-                    for section in &alignment_report.section_analysis.missing_sections {
-                        println!("  • {}", section);
-                    }
-                }
-            }
-            
-            // Gap Analysis and Recommendations
-            if !alignment_report.gap_analysis.recommendations.is_empty() {
-                println!("\n💡 Recommendations:");
-                for (i, rec) in alignment_report.gap_analysis.recommendations.iter().enumerate() {
-                    println!("  {}. {} (Priority: {:?}, Impact: {:?})", 
-                        i + 1, rec.title, rec.priority, rec.impact);
-                    println!("     {}", rec.description);
-                    if detailed {
-                        for step in &rec.actionable_steps {
-                            println!("     - {}", step);
+                // Initialize LLM analyzer
+                match llm::analyzer::LLMAnalyzer::new(config.clone()).await {
+                    Ok(mut llm_analyzer) => {
+                        // Try to initialize the LLM engine
+                        if let Err(e) = llm_analyzer.initialize_engine(llm.clone()).await {
+                            println!("⚠️  Warning: Could not initialize LLM engine: {}", e);
+                            println!("📊 Proceeding without LLM analysis...");
+                            None
+                        } else {
+                            println!("🤖 LLM engine initialized successfully!");
+                            
+                            // Prepare existing analysis data for LLM
+                            let existing_analysis = llm::analyzer::ExistingAnalysis {
+                                overall_score: alignment_report.overall_score,
+                                embedding_score: alignment_report.embedding_score,
+                                keyword_score: alignment_report.ats_score,
+                                missing_keywords: alignment_report.gap_analysis.missing_keywords.clone(),
+                                exact_matches: alignment_report.keyword_analysis.exact_matches.iter()
+                                    .map(|m| llm::analyzer::ExactMatch {
+                                        keyword: m.keyword.clone(),
+                                        count: m.count,
+                                    })
+                                    .collect(),
+                                section_scores: alignment_report.section_analysis.section_scores.iter()
+                                    .map(|(name, score)| (name.clone(), llm::analyzer::SectionScore {
+                                        combined_score: score.combined_score,
+                                        embedding_score: score.embedding_score,
+                                        keyword_score: score.keyword_score,
+                                    }))
+                                    .collect(),
+                            };
+                            
+                            // Perform LLM analysis
+                            match llm_analyzer.analyze(&processed_resume, &processed_job, &existing_analysis).await {
+                                Ok(llm_result) => {
+                                    println!("✅ LLM analysis completed!");
+                                    println!("🎯 LLM Score: {:.1}% (confidence: {:.1}%)", 
+                                        llm_result.overall_score * 100.0, 
+                                        llm_result.confidence * 100.0
+                                    );
+                                    println!("📊 Token usage: {} total ({} in, {} out)", 
+                                        llm_result.token_usage.total_tokens,
+                                        llm_result.token_usage.input_tokens,
+                                        llm_result.token_usage.output_tokens
+                                    );
+                                    Some(llm_result)
+                                }
+                                Err(e) => {
+                                    println!("⚠️  LLM analysis failed: {}", e);
+                                    println!("📊 Proceeding with embeddings + ATS analysis only...");
+                                    None
+                                }
+                            }
                         }
                     }
+                    Err(e) => {
+                        println!("⚠️  Could not initialize LLM analyzer: {}", e);
+                        println!("📊 Proceeding with embeddings + ATS analysis only...");
+                        None
+                    }
+                }
+            } else {
+                println!("\n⚠️  LLM analysis disabled (--no-llm flag)");
+                None
+            };
+
+            // Phase 6: Generate Comprehensive Report
+            println!("\n🔄 Phase 6: Generating comprehensive report...");
+
+            // Create component weights from config
+            let component_weights = output::ComponentWeights {
+                embedding_weight: config.scoring.embedding_weight,
+                keyword_weight: config.scoring.keyword_weight,
+                llm_weight: config.scoring.llm_weight,
+            };
+
+            // Generate comprehensive report
+            let comprehensive_report = output::ComprehensiveReport::from_alignment_analysis(
+                alignment_report.clone(),
+                llm_analysis,
+                component_weights,
+            );
+
+            // Initialize report generator
+            let report_generator = if detailed {
+                output::ReportGenerator::with_options(
+                    true,   // use_colors
+                    true,   // detailed
+                    true,   // pretty_json
+                    true,   // include_metadata
+                    true,   // include_html_styles
+                    false,  // include_pdf_charts
+                )
+            } else {
+                output::ReportGenerator::new()
+            };
+
+            // Generate the formatted output
+            let formatted_output = report_generator.generate_report(&comprehensive_report, &output_format)?;
+
+            // Display the report
+            match output_format {
+                config::OutputFormat::Console => {
+                    println!("\n{}", formatted_output);
+                }
+                _ => {
+                    // For non-console formats, show a brief summary and save info
+                    println!("\n📊 Final Analysis Summary:");
+                    println!("Overall Score: {}% - {}", 
+                        comprehensive_report.analysis_summary.overall_score_percentage,
+                        comprehensive_report.analysis_summary.verdict
+                    );
+                    
+                    if let Some(save_path) = save {
+                        // Save to specified file
+                        output::save_report_to_file(&formatted_output, &save_path)?;
+                        println!("💾 Report saved to: {}", save_path.display());
+                    } else {
+                        // Auto-generate filename and save
+                        let filename = output::suggest_filename(
+                            &output_format, 
+                            &resume.to_string_lossy(), 
+                            true
+                        );
+                        let save_path = std::env::current_dir()?.join(filename);
+                        output::save_report_to_file(&formatted_output, &save_path)?;
+                        println!("💾 Report saved to: {}", save_path.display());
+                    }
                 }
             }
-            
-            // Priority Gaps
-            if !alignment_report.gap_analysis.priority_gaps.is_empty() {
-                println!("\n⚠️  Priority Gaps:");
-                for gap in &alignment_report.gap_analysis.priority_gaps {
-                    println!("  • {} (Severity: {:?})", gap.description, gap.severity);
+
+            // Show quick recommendations preview for all formats
+            if !comprehensive_report.recommendations.is_empty() {
+                println!("\n💡 Top {} Recommendations:", 
+                    comprehensive_report.recommendations.len().min(3)
+                );
+                for (i, rec) in comprehensive_report.recommendations.iter().take(3).enumerate() {
+                    let priority_icon = match rec.priority {
+                        output::RecommendationPriority::Critical => "🚨",
+                        output::RecommendationPriority::High => "⚠️",
+                        output::RecommendationPriority::Medium => "📋",
+                        output::RecommendationPriority::Low => "💡",
+                    };
+                    println!("  {}. {} {}", i + 1, priority_icon, rec.title);
                 }
             }
-            
-            // Performance and Model Info
-            println!("\n⚡ Performance:");
-            println!("  • Processing Time: {}ms", alignment_report.processing_time_ms);
-            println!("  • Embedding Model: {}", alignment_report.model_info.embedding_model);
-            println!("  • ATS Skill Database: {} skills", alignment_report.model_info.ats_matcher_skills);
-            
-            let stats = analysis_engine.get_stats();
-            println!("  • Embedding Cache: {} entries", stats.embedding_cache_size);
-            println!("  • Fuzzy Threshold: {:.1}%", stats.fuzzy_threshold * 100.0);
-            
-            println!("\n✅ Phase 4 (Comprehensive Analysis) completed successfully!");
-            println!("🎯 Analysis complete! Resume alignment score: {:.1}%", alignment_report.overall_score * 100.0);
+
+            println!("\n✅ Phase 6 (Comprehensive Reporting) completed successfully!");
+            println!("🎉 Analysis complete! Overall alignment score: {:.1}%", 
+                comprehensive_report.analysis_summary.overall_score_percentage
+            );
         }
         
         Commands::Models { action } => {

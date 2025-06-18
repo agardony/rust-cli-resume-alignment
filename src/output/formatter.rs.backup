@@ -289,7 +289,7 @@ pub struct ReportGenerator {
         </div>
     </div>
 </body>
-</html>"#, ext = "html")]
+</html>
 struct HtmlTemplate {
     include_styles: bool,
     generated_at: String,
@@ -321,7 +321,7 @@ struct HtmlTemplate {
     // Raw LLM output fields
     has_raw_llm_output: bool,
     llm_processing_time: u64,
-    llm_total_tokens: usize,
+    llm_total_tokens: u32,
     has_strategic_analysis: bool,
     strategic_analysis_raw: String,
     has_achievement_suggestions: bool,

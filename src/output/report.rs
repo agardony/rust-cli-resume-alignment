@@ -75,6 +75,9 @@ pub struct LLMInsights {
     
     /// Model used for analysis
     pub model_used: String,
+    
+    /// Raw unedited output from the LLM
+    pub raw_llm_output: RawLLMOutput,
 }
 
 /// Actionable recommendations with examples
@@ -265,6 +268,34 @@ pub struct ModelsUsed {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawLLMOutput {
+    /// Full unedited strategic analysis from LLM
+    pub strategic_analysis: String,
+    
+    /// Full unedited achievement suggestions from LLM
+    pub achievement_suggestions: String,
+    
+    /// Full unedited ATS optimization from LLM
+    pub ats_optimization: String,
+    
+    /// Combined raw output (if using single prompt)
+    pub combined_output: Option<String>,
+    
+    /// Processing time for LLM analysis
+    pub processing_time_ms: u64,
+    
+    /// Token usage information
+    pub token_usage: TokenUsageInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenUsageInfo {
+    pub input_tokens: usize,
+    pub output_tokens: usize,
+    pub total_tokens: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillLevelGap {
     pub skill: String,
     pub required_level: String,
@@ -452,6 +483,18 @@ impl ComprehensiveReport {
                     transferable_skills: vec![],
                     llm_confidence: llm.confidence,
                     model_used: llm.model_used.clone(),
+                    raw_llm_output: RawLLMOutput {
+                        strategic_analysis: llm.strategic_analysis.clone(),
+                        achievement_suggestions: llm.achievement_suggestions.clone(),
+                        ats_optimization: llm.ats_optimization.clone(),
+                        combined_output: None, // Will be added in future update
+                        processing_time_ms: llm.processing_time_ms,
+                        token_usage: TokenUsageInfo {
+                            input_tokens: llm.token_usage.input_tokens,
+                            output_tokens: llm.token_usage.output_tokens,
+                            total_tokens: llm.token_usage.total_tokens,
+                        },
+                    },
                 }
             }
             None => {
@@ -469,6 +512,18 @@ impl ComprehensiveReport {
                     transferable_skills: vec![],
                     llm_confidence: 0.0,
                     model_used: "None".to_string(),
+                    raw_llm_output: RawLLMOutput {
+                        strategic_analysis: String::new(),
+                        achievement_suggestions: String::new(),
+                        ats_optimization: String::new(),
+                        combined_output: None,
+                        processing_time_ms: 0,
+                        token_usage: TokenUsageInfo {
+                            input_tokens: 0,
+                            output_tokens: 0,
+                            total_tokens: 0,
+                        },
+                    },
                 }
             }
         }

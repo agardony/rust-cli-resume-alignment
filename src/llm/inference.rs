@@ -285,6 +285,12 @@ impl LLMEngine {
             config,
         })
     }
+
+    /// Check if token is end-of-sequence
+    fn is_eos_token(&self, token: u32) -> bool {
+        // Common EOS tokens for different models
+        matches!(token, 2 | 32000 | 32001 | 128001 | 128009)
+    }
     
     /// Load a Phi-3 model specifically
     fn load_phi3_model(
@@ -662,9 +668,11 @@ impl LLMEngine {
     pub async fn generate_with_timing(&mut self, prompt: &str) -> Result<(InferenceResult, TimingBreakdown)> {
         let total_start = std::time::Instant::now();
         
-        // Time tokenization
-        let tokenize_start = std::time::Instant::now();
+        // Reset KV cache for fresh generation
         self.model.reset_kv_cache()?;
+        
+        // Tokenization
+        let tokenize_start = std::time::Instant::now();
         let encoding = self.tokenizer.encode(prompt, true).map_err(|e| {
             ResumeAlignerError::ModelError(format!("Failed to tokenize input: {}", e))
         })?;
@@ -673,75 +681,113 @@ impl LLMEngine {
         let tokenize_time = tokenize_start.elapsed();
         
         if is_verbose_mode() {
-            println!("🔤 Tokenization: {}ms ({} input tokens)", tokenize_time.as_millis(), tokens.len());
+            println!("🔤 Tokenized {} input tokens in {}ms", tokens.len(), tokenize_time.as_millis());
         }
-        
-        // Time first forward pass (prompt processing)
+    
+        // Process entire prompt at once (this is the key fix)
         let first_pass_start = std::time::Instant::now();
-        let input_tensor = Tensor::new(&*tokens, &self.device)?.unsqueeze(0)?;  // FIXED
-        let _first_logits = self.model.forward(&input_tensor, 0)?;
+        let input_tensor = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
+        let mut logits = self.model.forward(&input_tensor, 0)?;
         let first_pass_time = first_pass_start.elapsed();
-
+    
         if is_verbose_mode() {
-            println!("🚀 First forward pass: {}ms", first_pass_time.as_millis());
+            println!("🚀 Processed entire prompt ({} tokens) in {}ms", tokens.len(), first_pass_time.as_millis());
         }
-        // Time token generation loop
+    
+        // Generation loop - now properly incremental
         let generation_start = std::time::Instant::now();
         let mut generated_tokens = Vec::new();
-        let mut index_pos = tokens.len();
+        let input_length = tokens.len();
         
-        for index in 0..self.config.max_tokens {
+        for step in 0..self.config.max_tokens {
             let token_start = std::time::Instant::now();
             
-            // Process just the last token (with KV cache)
-            let last_token = tokens[tokens.len() - 1];
-            let input_tensor = Tensor::new([last_token].as_slice(), &self.device)?.unsqueeze(0)?;  // FIXED
-            let logits = self.model.forward(&input_tensor, index_pos)?;
-            
-            // Sample next token (simplified)
-            let logits = logits.squeeze(0)?;
-            let final_logits = if logits.dims().len() == 2 {
+            // Get the last token's logits from current output
+            let final_logits = if logits.dims().len() == 3 {
+                // [batch_size, seq_len, vocab_size] - get last position
+                let seq_len = logits.dims()[1];
+                logits.i((0, seq_len - 1))?
+            } else if logits.dims().len() == 2 {
+                // [seq_len, vocab_size] - get last position  
                 let seq_len = logits.dims()[0];
                 logits.i(seq_len - 1)?
             } else {
-                logits
+                // Already correct shape
+                logits.clone()
             };
             
-            let next_token = final_logits.argmax(candle_core::D::Minus1)?
-                .to_scalar::<u32>()?;
-            
-            let token_time = token_start.elapsed();
-            
-            // Log slow tokens
-            if token_time.as_millis() > 100 && is_verbose_mode() {
-                println!("⚠️  Slow token {}: {}ms", index, token_time.as_millis());
-            }
-            
-            index_pos += 1;
-            
-            // Check for EOS
-            if next_token == 2 || next_token == 32000 {
+            // Sample next token
+            //let next_token = final_logits.argmax(candle_core::D::Minus1)?
+             //   .to_scalar::<u32>()?;
+
+            // Sample next token with improved EOS handling
+            let next_token = {
+                let top_values = final_logits.to_vec1::<f32>()?;
+                let mut indexed_values: Vec<(usize, f32)> = top_values.iter().enumerate().map(|(i, &v)| (i, v)).collect();
+                indexed_values.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                
+                let mut chosen_token = indexed_values[0].0 as u32;
+                let mut choice_index = 0;
+                
+                // Skip EOS tokens for first 15 tokens to ensure proper analysis starts
+                if step < 15 && self.is_eos_token(chosen_token) && indexed_values.len() > choice_index + 1 {
+                    let logit_gap = indexed_values[choice_index].1 - indexed_values[choice_index + 1].1;
+                    if logit_gap < 4.0 {  // More lenient gap
+                        choice_index += 1;
+                        chosen_token = indexed_values[choice_index].0 as u32;
+                        println!("🔄 Step {}: Skipping EOS token, using choice {} (token {})", 
+                            step, choice_index + 1, chosen_token);
+                        
+                        // If the next choice is also EOS, try one more
+                        if self.is_eos_token(chosen_token) && indexed_values.len() > choice_index + 1 {
+                            let next_gap = indexed_values[choice_index].1 - indexed_values[choice_index + 1].1;
+                            if next_gap < 2.0 {
+                                choice_index += 1;
+                                chosen_token = indexed_values[choice_index].0 as u32;
+                                println!("🔄 Step {}: Second EOS skip, using choice {} (token {})", 
+                                    step, choice_index + 1, chosen_token);
+                            }
+                        }
+                    }
+                }
+                
+                chosen_token
+            };
+
+            // Only check for EOS after we've generated some meaningful content
+            if step >= 10 && self.is_eos_token(next_token) {
+                if is_verbose_mode() {
+                    println!("🛑 EOS token detected ({}) after {} tokens, stopping generation", next_token, step);
+                }
                 break;
             }
-            
+
             tokens.push(next_token);
             generated_tokens.push(next_token);
             
-            // Early exit check every 10 tokens
-            if index % 10 == 0 && index > 0 && is_verbose_mode(){
-                println!("📊 Generated {} tokens in {}ms (avg: {:.1}ms/token)", 
-                    index, generation_start.elapsed().as_millis(),
-                    generation_start.elapsed().as_millis() as f64 / index as f64);
+            // Process only the new token for next iteration
+            let new_token_tensor = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
+            logits = self.model.forward(&new_token_tensor, input_length + step)?;
+            
+            let token_time = token_start.elapsed();
+            
+            if is_verbose_mode() && step > 0 && step % 10 == 0 {
+                println!("📊 Generated {} tokens, avg: {:.1}ms/token", 
+                    step, generation_start.elapsed().as_millis() as f64 / step as f64);
             }
         }
         
         let generation_time = generation_start.elapsed();
         
-        // Time decoding
+        // Decode generated tokens only
         let decode_start = std::time::Instant::now();
         let generated_text = self.tokenizer.decode(&generated_tokens, true)
             .map_err(|e| ResumeAlignerError::ModelError(format!("Failed to decode: {}", e)))?;
         let decode_time = decode_start.elapsed();
+
+        // DEBUG: Show what was actually generated
+        println!("🎯 Generated text: '{}'", generated_text);
+        println!("🔢 Generated tokens: {:?}", generated_tokens);
         
         let total_time = total_start.elapsed();
         
@@ -751,22 +797,12 @@ impl LLMEngine {
             first_pass_ms: first_pass_time.as_millis() as u64,
             generation_ms: generation_time.as_millis() as u64,
             decode_ms: decode_time.as_millis() as u64,
-            input_tokens: tokens.len() - generated_tokens.len(),
+            input_tokens: input_length,
             output_tokens: generated_tokens.len(),
             avg_ms_per_token: if generated_tokens.is_empty() { 0.0 } else { 
                 generation_time.as_millis() as f64 / generated_tokens.len() as f64 
             },
         };
-        
-        if is_verbose_mode() {
-            println!("⏱️  TIMING BREAKDOWN:");
-            println!("   Tokenization: {}ms", timing.tokenization_ms);
-            println!("   First Pass:   {}ms", timing.first_pass_ms);
-            println!("   Generation:   {}ms ({} tokens, {:.1}ms/token)", 
-                timing.generation_ms, timing.output_tokens, timing.avg_ms_per_token);
-            println!("   Decoding:     {}ms", timing.decode_ms);
-            println!("   TOTAL:        {}ms", timing.total_ms);
-        }
         
         let result = InferenceResult {
             text: generated_text.trim().to_string(),
@@ -777,12 +813,23 @@ impl LLMEngine {
             },
         };
         
+        if is_verbose_mode() {
+            println!("⏱️  TIMING BREAKDOWN:");
+            println!("   Tokenization: {}ms", timing.tokenization_ms);
+            println!("   Prompt Processing: {}ms ({} tokens)", timing.first_pass_ms, timing.input_tokens);
+            println!("   Generation: {}ms ({} tokens, {:.1}ms/token)", 
+                timing.generation_ms, timing.output_tokens, timing.avg_ms_per_token);
+            println!("   Decoding: {}ms", timing.decode_ms);
+            println!("   TOTAL: {}ms ({:.1} tokens/sec)", 
+                timing.total_ms, 
+                timing.output_tokens as f64 / (timing.total_ms as f64 / 1000.0));
+        }
+        
         Ok((result, timing))
     }
-    
+
     pub async fn generate(&mut self, prompt: &str) -> Result<InferenceResult> {
         let (result, timing) = self.generate_with_timing(prompt).await?;
-        
         // Only show timing if explicitly requested
         if is_verbose_mode() {
             println!("⏱️ Generation took {}ms ({:.1} tokens/sec)", 

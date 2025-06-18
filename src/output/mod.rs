@@ -4,6 +4,6 @@ pub mod report;
 pub mod formatter;
 
 // Re-export key types for convenience
-// pub use report::*;
-// pub use formatter::*;
+pub use report::*;
+pub use formatter::*;
 

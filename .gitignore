@@ -34,3 +34,13 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Generated reports
+*_analysis_*.html
+*_analysis_*.json
+*_analysis_*.md
+*_analysis_*.pdf
+*_analysis_*.txt
+report.html
+output.html
+*_detailed.txt
